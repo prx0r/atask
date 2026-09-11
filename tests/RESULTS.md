@@ -1,5 +1,31 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — token-honesty review (did it work? are we wasting tokens?)
+- Did the money run work? As control/proof: fully (goal→DONE, receipts,
+  5/5 product tests, live fetch). As money: no — MVP exists, revenue
+  doesn't; the priced proofs are defined, none met. Framework did its
+  job; the money claim was never validated. Honest score: half.
+- Token waste: yes, and it's in the CHAT layer, not the kernel. Every
+  run already records durations/tokens/events to files (internal
+  tracking exists). The waste is pasting full JSON snapshots, closes,
+  and pulse dumps into conversation. Fix adopted: quiet mode — chat
+  shows close lines + verdicts; files hold the rest. This response is
+  the first under the rule.
+- Hermes vs pydantic question: both, split correctly. Hermes is the
+  worker runtime (exists on-box with kanban) — workers should execute
+  there, where model calls and usage are metered at the source, and
+  report receipts back. Pydantic stays views-only outside the kernel
+  (CI test enforces). Internal tracking → summary-at-end is exactly
+  right, and the substrate already supports it; only my chatter didn't.
+- Evolution: task DECOMPOSITION shape is the optimization problem —
+  depth, branching factor, granularity vs time/tokens/pass rate. All
+  fields already logged (parent/depth/covers_goal + runs + results).
+  Frontier methods that fit: BATS exploit-vs-pivot, contextual bandits
+  over decomposition choices, plan-shape A/B from history. Missing
+  ingredient is volume: 4 runs is anecdote, 1000 is a dataset. The
+  kernel's job is to make every one of those 1000 runs cheap to record
+  and impossible to fake — done. Learning happens above it.
+
 ## 2026-09-11 — money run (session `money1`, GOAL_DONE): MetaCraft microsaas
 - Prompt "make me a microsaas to make money" worked as a 4-task goal:
   pick → build → price → track, all DONE via pulses, acheck 0.
