@@ -1,5 +1,16 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — working h-task live (session `live1` + `liveproof`)
+- Phase 1 of the attack plan DONE: live human loop over digits in a
+  scratch queue — 2 attempts + red probes → escalate (op+alts) →
+  ZOOM/MORE/ACCEPT → fix files → reports → pulse promoted 2 →
+  LIVE_GOAL_DONE + digest (3 presses, 1 answered).
+- Union-covers fix verified live (`--covers 0 --covers 1` one line).
+- Known open: acheck shows 1 pre-existing finding (a-cron EXECUTING
+  without a-log, carried from the prior goal era). Left visible, not
+  gamed. Next phases: working m-task (live grant cycle), then forecast
+  baseline (meters/, outside kernel).
+
 ## 2026-09-11 — a-plan.md saved (compiler vision, not kernel)
 - Saved `a-plan.md` verbatim + kernel-status mapping per section.
   Standing split enforced: forecasts never enter the queue; compiler
