@@ -119,7 +119,12 @@ def alog_path(tid: str, root: Path) -> Path:
 def alog(tid: str, action: str, covers: list[int], root: Path,
          detail: str = "", evidence: str = "") -> dict:
     """Append one a-log line. evidence is "" or "command:<cmd>" (re-executed
-    by stoplight) — lines without evidence count covers on trust."""
+    by stoplight) — lines without evidence count covers on trust.
+    No work exists outside an A-task: unknown ids are refused, not filed."""
+    root = Path(root)
+    known = {r.get("id") for r in load(root / "tasks.jsonl")}
+    if tid not in known:
+        raise ValueError(f"unknown task (no work outside A-tasks): {tid}")
     p = alog_path(tid, root)
     p.parent.mkdir(parents=True, exist_ok=True)
     entry = {"ts": time.time(), "task": tid, "action": action,
@@ -154,9 +159,29 @@ def check_evidence(ev: str, cwd: Path) -> str | None:
     return None
 
 
+def check_required(ev: dict, root: Path) -> str | None:
+    """Execute one DECLARED evidence item. None = satisfied, else reason.
+    entries: {"kind": "command", "spec": "<shell cmd>"} (runs green now,
+    cwd = repo root) or {"kind": "file", "spec": "<path>"} (exists now,
+    resolved state-dir first). Declared pre-work, enforced at stoplight."""
+    root = Path(root)
+    if not isinstance(ev, dict):
+        return f"required evidence malformed: {ev!r}"[:120]
+    kind, spec = ev.get("kind", ""), (ev.get("spec") or "").strip()
+    if kind == "command" and spec:
+        return check_evidence("command:" + spec, root.parent)
+    if kind == "file" and spec:
+        for c in (root / spec, Path(spec), root.parent / spec):
+            if c.exists() and c.is_file():
+                return None
+        return f"required file missing: {spec}"[:120]
+    return f"required evidence needs kind command|file + spec, got: {ev!r}"[:120]
+
+
 def stoplight(tid: str, root: Path) -> dict:
-    """GO iff every acceptance index is a-log covered AND every evidence
-    claim re-executes green AND report file exists AND validation_ref set."""
+    """GO iff every acceptance index is a-log covered AND every DECLARED
+    evidence item is satisfied now AND every a-log claim re-executes green
+    AND report file exists AND validation_ref set AND validator passes."""
     root = Path(root)
     recs = {r.get("id"): r for r in load(root / "tasks.jsonl")}
     if tid not in recs:
@@ -172,6 +197,10 @@ def stoplight(tid: str, root: Path) -> dict:
     missing = [f"acceptance[{i}] uncovered: {a[:60]}"
                for i, a in enumerate(rec.get("acceptance", []) or [])
                if i not in covered] + missing
+    for i, req in enumerate(rec.get("evidence_required", []) or []):
+        bad = check_required(req, root)
+        if bad:
+            missing.append(f"required[{i}]: {bad}")
     rr = rec.get("report_ref", "")
     if rr and resolve(rr, root) is None:
         missing.append("report_ref file missing")
@@ -223,9 +252,23 @@ def set_status(tid: str, status: str, root: Path, **fields) -> tuple[bool, str]:
             return False, f"dangling blocked_by {b!r}"
     rec.update({k: v for k, v in fields.items() if v is not None})
     if status == "DONE":
+        # The gate runs on saved state (stoplight reads the queue file);
+        # on refusal the previous record is restored, never left dirty.
+        prev_rec = dict(by_id[tid])
+        rec["status"] = status
+        save_all(recs, q)
         errs = done_gate(rec, root)
+        sl = stoplight(tid, root)
+        if not sl["go"]:
+            errs += [f"stoplight: {m}"[:160] for m in sl["missing"][:6]]
         if errs:
+            by_id[tid].clear()
+            by_id[tid].update(prev_rec)  # in-place: recs list shares the object
+            save_all(recs, q)
             return False, "transition rejected: " + "; ".join(errs)
+        _emit(root, "run.finished", task_id=tid, outcome="validated",
+              attempts=int(rec.get("attempts", 0)))
+        return True, f"{tid} -> {status}"
     prev = rec.get("status", "")
     if status == "EXECUTING" and prev != "EXECUTING":
         rec["attempts"] = int(rec.get("attempts", 0)) + 1
@@ -234,9 +277,6 @@ def set_status(tid: str, status: str, root: Path, **fields) -> tuple[bool, str]:
     save_all(recs, q)
     _emit(root, "task.status", task_id=tid, **{"from": prev, "to": status},
           attempts=int(rec.get("attempts", 0)))
-    if status == "DONE":
-        _emit(root, "run.finished", task_id=tid, outcome="validated",
-              attempts=int(rec.get("attempts", 0)))
     return True, f"{tid} -> {status}"
 
 
@@ -307,7 +347,8 @@ MAX_DEPTH = 8
 
 
 def spawn(root: Path, parent: str, tid: str, summary: str,
-          acceptance: list[str], covers_goal: list[int] | None = None) -> tuple[bool, str]:
+          acceptance: list[str], covers_goal: list[int] | None = None,
+          evidence_required: list[dict] | None = None) -> tuple[bool, str]:
     root = Path(root)
     q = root / "tasks.jsonl"
     recs = load(q)
@@ -323,7 +364,8 @@ def spawn(root: Path, parent: str, tid: str, summary: str,
     if depth > MAX_DEPTH:
         return False, f"refused: depth {depth} exceeds MAX_DEPTH {MAX_DEPTH}"
     child = {"id": tid, "tier": "A", "summary": summary,
-             "acceptance": list(acceptance), "evidence_required": [],
+             "acceptance": list(acceptance),
+             "evidence_required": list(evidence_required or []),
              "blocked_by": list(par.get("blocked_by") or []),
              "status": "PROPOSED", "report_ref": "", "validation_ref": "",
              "parent": parent, "depth": depth,
@@ -513,6 +555,8 @@ def verify(root: Path) -> list[str]:
         for b in (r.get("blocked_by") or []):
             if b not in by_id:
                 out.append(f"{tag}: dangling blocked_by {b!r}")
+        if (r.get("acceptance") or []) and not (r.get("evidence_required") or []):
+            out.append(f"{tag}: acceptance without declared evidence (no trust-only tasks)")
         if r.get("status") == "DONE":
             out += [f"{tag}: {e}" for e in done_gate(r, root)]
         if r.get("status") == "PAUSED":
@@ -559,8 +603,6 @@ def main(argv: list[str] | None = None) -> int:
     p_log.add_argument("--covers", default="")
     p_log.add_argument("--detail", default="")
     p_log.add_argument("--evidence", default="")
-    p_log.add_argument("--cost", default=None)
-    p_log.add_argument("--tokens", default=None)
     p_sl = _dir(sub.add_parser("stoplight"))
     p_sl.add_argument("--id", required=True)
     p_done = _dir(sub.add_parser("done"))
@@ -584,6 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     p_spawn.add_argument("--id", required=True)
     p_spawn.add_argument("--summary", required=True)
     p_spawn.add_argument("--accept", action="append", default=[])
+    p_spawn.add_argument("--evidence", action="append", default=[])
     p_spawn.add_argument("--covers-goal", default="")
     p_esc = _dir(sub.add_parser("escalate"))
     p_esc.add_argument("--id", required=True)
@@ -611,8 +654,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--cached-tokens", default=None)
     p_run.add_argument("--token-source", default="agent")
     p_run.add_argument("--cost", default=None)
-    p_run.add_argument("--result", default="validated",
-                       choices=("failed", "validated", "abandoned"))
+    p_run.add_argument("--result", default="completed",
+                       choices=("completed", "failed", "abandoned"))
     p_run.add_argument("--validator", default="")
     p_bud = _dir(sub.add_parser("budget"))
     p_bud.add_argument("op", choices=("set", "show", "record", "check"))
@@ -642,8 +685,23 @@ def main(argv: list[str] | None = None) -> int:
         if any(r.get("id") == a.id for r in recs):
             print(f"duplicate id: {a.id}")
             return 1
+        reqs = []
+        for e in a.evidence:
+            if ":" in e:
+                k, s = e.split(":", 1)
+                k, s = k.strip(), s.strip()
+                if k in ("command", "file") and s:
+                    reqs.append({"kind": k, "spec": s})
+                    continue
+            print(f"bad --evidence (need kind:spec, kind=command|file): {e}"[:160])
+            return 1
+        if a.accept and not reqs:
+            # No trust-only tasks: acceptance without declared proof is
+            # unvalidatable. Say how you'll prove it, then prove it.
+            print("refused: acceptance needs ≥1 --evidence (kind:spec)")
+            return 1
         rec = {"id": a.id, "tier": a.tier, "summary": a.summary,
-               "acceptance": a.accept, "evidence_required": a.evidence,
+               "acceptance": a.accept, "evidence_required": reqs,
                "blocked_by": a.blocked_by, "status": "PROPOSED",
                "report_ref": "", "validation_ref": "",
                "depth": 0,
@@ -664,39 +722,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "log":
         covers = [int(c) for c in a.covers.split(",") if c.strip().isdigit()]
-        e = alog(a.id, a.action, covers, root, a.detail, a.evidence)
-        out: dict = {"logged": True, "covers": e["covers"]}
-        if a.cost is not None or a.tokens is not None:
-            # Spend is a recorded context field, not a subsystem: tiny
-            # floats on the task so press rows can cite them. No caps here.
-            try:
-                cost = float(a.cost) if a.cost is not None else 0.0
-                toks = int(float(a.tokens)) if a.tokens is not None else 0
-            except ValueError:
-                print("unparseable --cost/--tokens (must be numbers)")
-                return 1
-            q = root / "tasks.jsonl"
-            recs = load(q)
-            for r in recs:
-                if r.get("id") == a.id:
-                    r["spent_usd"] = round(float(r.get("spent_usd", 0.0)) + cost, 6)
-                    r["spent_tokens"] = int(r.get("spent_tokens", 0)) + toks
-                    out["spent"] = {"spent_usd": r["spent_usd"],
-                                    "spent_tokens": r["spent_tokens"]}
-                    break
-            save_all(recs, q)
-            if cost or toks:
-                _emit(root, "resource.used", task_id=a.id,
-                      cost_usd=cost, tokens=toks)
-                # Enforced brake (SpendLimits): the crossing call completes
-                # and is fully logged; the NEXT metered call is refused.
-                try:
-                    from budget import BudgetExceeded, FileBudget
-                    FileBudget(root).record(tokens=toks, cost=cost or None,
-                                            label=a.id)
-                except BudgetExceeded as ex:
-                    out["budget_warning"] = str(ex)[:160]
-        print(json.dumps(out))
+        try:
+            e = alog(a.id, a.action, covers, root, a.detail, a.evidence)
+        except ValueError as ex:
+            print(str(ex)[:160])
+            return 1
+        print(json.dumps({"logged": True, "covers": e["covers"]}))
         return 0
 
     if a.cmd == "stoplight":
@@ -758,8 +789,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "spawn":
         cg = [int(c) for c in a.covers_goal.split(",") if c.strip().isdigit()]
+        reqs = []
+        for e in a.evidence:
+            if ":" in e:
+                k, s = e.split(":", 1)
+                if k.strip() in ("command", "file") and s.strip():
+                    reqs.append({"kind": k.strip(), "spec": s.strip()})
+                    continue
+            print(f"bad --evidence (need kind:spec): {e}"[:160])
+            return 1
+        if a.accept and not reqs:
+            print("refused: acceptance needs ≥1 --evidence (kind:spec)")
+            return 1
         ok, msg = spawn(root, a.parent, a.id, a.summary, a.accept,
-                        cg or None)
+                        cg or None, reqs or None)
         print(msg)
         return 0 if ok else 1
 
@@ -843,7 +886,18 @@ def main(argv: list[str] | None = None) -> int:
             _emit(root, "resource.used", task_id=run.task_id, run_id=run.run_id,
                   cost_usd=run.reported_cost_usd, tokens=run.output_tokens,
                   token_source=run.token_source, model=run.model)
-            print(json.dumps(run.snapshot(), indent=1)[:2000])
+            # The usage receipt IS the metered call: charge the brake here
+            # (single spend path — no double-count). Crossing completes + warns.
+            out = run.snapshot()
+            try:
+                from budget import BudgetExceeded, FileBudget
+                FileBudget(root).record(
+                    tokens=sum(v for v in (run.input_tokens, run.output_tokens,
+                                           run.cached_tokens) if v is not None),
+                    cost=run.reported_cost_usd, label=run.run_id)
+            except BudgetExceeded as ex:
+                out["budget_warning"] = str(ex)[:160]
+            print(json.dumps(out, indent=1)[:2000])
             return 0
         try:
             snap = run.finish(a.result, a.validator)

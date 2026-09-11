@@ -1,5 +1,25 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — final minimal pass (the six fixes)
+- Suite: **67/67 green**. DONE⇒stoplight green inside the transition
+  (save→check→revert, no dirty state); direct `done` with full proof
+  passes legitimately, without proof refuses with the stoplight reason.
+- `evidence_required` is mechanical: `kind:spec` at creation, executed at
+  stoplight (commands run, files checked); malformed refused. No
+  trust-only tasks: creation refuses acceptance-without-evidence,
+  `verify` flags grandfathered records, suite helper declares `echo ok`.
+- A-RUN sole accounting: `log --cost/--tokens` removed (double-count
+  source gone); usage receipts charge the brake; spend/tokens derive
+  from `runs.jsonl` only. Workers finish completed/failed/abandoned —
+  `validated` refused; validation comes only from promotion events.
+- Deleted the duplicate `Run` class (tests stayed green throughout —
+  noted as a coverage smell: schema-shape test added).
+- `alog` refuses unknown tasks (function raises, CLI exit 1, no file).
+- Mono reboot fallback in `finish` (wall clock when monotonic jumped).
+- Bugs the new tests caught mid-pass: revert-path aliasing (DONE
+  persisted despite refusal), file-spec rooted at repo instead of state
+  dir. Both fixed, both regressed.
+
 ## 2026-09-11 — A-RUN measurement session
 - Suite: **60/60 green**. A-RUN complete: `run start/usage/finish/list`,
   `runs.jsonl` append-only, `runs-open/` stubs (crash-safe close),

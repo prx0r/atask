@@ -11,15 +11,19 @@ not depend on the answer.
 1. **A-goal.** One active end-state with checkable acceptance. DONE when
    every acceptance index is covered by DONE tasks — derived, never declared.
 2. **A-tasks.** Each maps to goal indices and carries its own acceptance +
-   evidence plan. READY = JUSTIFIED/EXECUTING with all `blocked_by` DONE.
+   DECLARED evidence (`command:`/`file:` specs). Acceptance without
+   declared proof is refused at creation — no trust-only tasks.
    Branch deeper with `spawn` (children finish first, depth 8 refuses).
    Every execution is one A-RUN (`run start/usage/finish`): time, tokens
-   (+source), reported cost, result. Unknown stays null — never estimate.
+   (+source), reported cost, result completed/failed/abandoned. Workers
+   never declare `validated`; unknown stays null — never estimate.
 3. **A-logs.** Every action appends a line tagging covered acceptance
    indices + re-runnable evidence (`command:...`). No log, no claim.
-4. **A-proof.** A validator script judges log-vs-criteria; the stoplight
-   re-runs every evidence claim. Validators fail tasks, never excuse them.
-   REPORTED → DONE iff green. No receipt, no DONE — forever.
+   No work exists outside an A-task: unknown ids are refused, not filed.
+4. **A-proof.** The stoplight executes every DECLARED item now, re-runs
+   every a-log claim, then runs the validator script. Validators fail
+   tasks, never excuse them. DONE requires stoplight green INSIDE the
+   transition (direct `done` included) + report + untampered receipt.
 5. **A-ask.** Blocked on a human? Only at a genuine boundary —
    AUTHORIZATION, SECRET, PREFERENCE, PHYSICAL, IDENTITY, AMBIGUITY
    (enforced in code; anything else is refused). File kind + need +

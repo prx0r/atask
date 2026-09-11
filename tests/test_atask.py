@@ -44,11 +44,16 @@ def write_receipt(root, tid, payload="ok"):
     return r["run_id"]
 
 
-def add_task(root, tid, accept=("done-state",), blocked=()):
+def add_task(root, tid, accept=("done-state",), blocked=(),
+             ev=("command:echo ok",)):
     q = os.path.join(root, "tasks.jsonl")
     recs = atask.load(q)
+    reqs = []
+    for e in ev:
+        k, s = e.split(":", 1)
+        reqs.append({"kind": k, "spec": s})
     recs.append({"id": tid, "tier": "A", "summary": f"task {tid}",
-                 "acceptance": list(accept), "evidence_required": [],
+                 "acceptance": list(accept), "evidence_required": reqs,
                  "blocked_by": list(blocked), "status": "PROPOSED",
                  "report_ref": "", "validation_ref": ""})
     atask.save_all(recs, q)
@@ -530,17 +535,23 @@ class TestControlHarness(unittest.TestCase):
         self.assertIn("spent_usd", out["outcome"])
         self.assertEqual(out["outcome"]["presses"], 1)
 
-    def test_spend_is_recorded_context(self):
+    def test_spend_comes_only_from_runs(self):
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-c")
         atask.alog("a-c", "work", [0], root, "x", "")
-        q = os.path.join(root, "tasks.jsonl")
-        recs = atask.load(q)
-        recs[0]["spent_usd"] = 0.72
-        atask.save_all(recs, q)
+        atask.main(["run", "start", "--dir", root, "--id", "a-c"])
+        from runs import list_open
+        rid = list_open(root, "a-c")[0]["run_id"]
+        atask.main(["run", "usage", "--dir", root, "--run", rid,
+                    "--input-tokens", "7000", "--output-tokens", "700",
+                    "--cost", "0.72"])
+        atask.main(["run", "finish", "--dir", root, "--run", rid,
+                    "--result", "completed"])
         from driver import spent_totals
-        self.assertAlmostEqual(spent_totals(root)["spent_usd"], 0.72)
+        tot = spent_totals(root)
+        self.assertAlmostEqual(tot["spent_usd"], 0.72)
+        self.assertEqual(tot["spent_tokens"], 7700)
 
     def test_mcp_seven_verbs(self):
         import subprocess as _sp
@@ -626,15 +637,12 @@ class TestEventSubstrate(unittest.TestCase):
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-c")
-        atask.set_status("a-c", "EXECUTING", root)
-        atask.alog("a-c", "work", [0], root, "x", "")
-        q = os.path.join(root, "tasks.jsonl")
-        recs = atask.load(q)
-        recs[0]["spent_usd"] = 0.03
-        atask.save_all(recs, q)
-        # CLI path emits resource.used (in-process: same argv handling).
-        rc = atask.main(["log", "--dir", root, "--id", "a-c",
-                         "--covers", "0", "--cost", "0.01", "--tokens", "50"])
+        atask.main(["run", "start", "--dir", root, "--id", "a-c"])
+        from runs import list_open
+        rid = list_open(root, "a-c")[0]["run_id"]
+        rc = atask.main(["run", "usage", "--dir", root, "--run", rid,
+                         "--input-tokens", "100", "--output-tokens", "50",
+                         "--cost", "0.01"])
         self.assertEqual(rc, 0)
         res = eread(root, "resource.used")
         self.assertEqual(len(res), 1)
@@ -644,10 +652,12 @@ class TestEventSubstrate(unittest.TestCase):
         from runs import Run
         r = Run(task_id="a-x")
         r.note(cost_usd=0.02, tokens=100, tools=3)
-        snap = r.finish("validated")
-        self.assertEqual(snap["result"], "validated")
+        snap = r.finish("completed")
+        self.assertEqual(snap["result"], "completed")
         self.assertAlmostEqual(snap["spent_usd"], 0.02)
         self.assertGreaterEqual(snap["elapsed_ms"], 0)
+        with self.assertRaises(ValueError):
+            Run(task_id="a-x").finish("validated")  # workers can't self-validate
 
     def test_run_unknown_tokens_stay_null(self):
         from runs import Run
@@ -667,13 +677,14 @@ class TestEventSubstrate(unittest.TestCase):
         goal_set(root, "g", ["x"], budget_usd=1.0, token_budget=1000,
                  deadline_min=30)
         add_task(root, "a-c")
-        atask.set_status("a-c", "EXECUTING", root)
-        atask.alog("a-c", "work", [0], root, "x", "")
-        q = os.path.join(root, "tasks.jsonl")
-        recs = atask.load(q)
-        recs[0]["spent_usd"] = 0.25
-        recs[0]["spent_tokens"] = 100
-        atask.save_all(recs, q)
+        atask.main(["run", "start", "--dir", root, "--id", "a-c"])
+        from runs import list_open
+        rid = list_open(root, "a-c")[0]["run_id"]
+        atask.main(["run", "usage", "--dir", root, "--run", rid,
+                    "--input-tokens", "50", "--output-tokens", "50",
+                    "--cost", "0.25"])
+        atask.main(["run", "finish", "--dir", root, "--run", rid,
+                    "--result", "completed"])
         res = resources(root)
         self.assertAlmostEqual(res["remaining_usd"], 0.75)
         self.assertEqual(res["remaining_tokens"], 900)
@@ -893,20 +904,21 @@ class TestBudgetEnforced(unittest.TestCase):
         self.assertAlmostEqual(b2.spent_usd, 0.25)
         self.assertEqual(b2.advertise()["ATASK_BUDGET_USD"], "0.75")
 
-    def test_log_charges_and_warns_on_crossing(self):
+    def test_usage_charges_and_warns_on_crossing(self):
         from budget import FileBudget
+        from runs import list_open
         root = fresh_root(self)
         driver_boot(root)
         FileBudget(root).set_caps(0.05, None)
         add_task(root, "a-c")
-        atask.set_status("a-c", "EXECUTING", root)
-        atask.alog("a-c", "work", [0], root, "x", "")
-        rc = atask.main(["log", "--dir", root, "--id", "a-c",
-                         "--covers", "0", "--cost", "0.05"])
-        self.assertEqual(rc, 0)  # crossing call still logs
-        by_id = {r["id"]: r for r in
-                 atask.load(os.path.join(root, "tasks.jsonl"))}
-        self.assertAlmostEqual(by_id["a-c"]["spent_usd"], 0.05)
+        atask.main(["run", "start", "--dir", root, "--id", "a-c"])
+        rid = list_open(root, "a-c")[0]["run_id"]
+        rc = atask.main(["run", "usage", "--dir", root, "--run", rid,
+                         "--input-tokens", "100", "--output-tokens", "50",
+                         "--cost", "0.05"])
+        self.assertEqual(rc, 0)  # crossing call still records
+        self.assertAlmostEqual(FileBudget(root).spent_usd, 0.05)
+        self.assertTrue(FileBudget(root).exhausted())
 
     def test_pulse_refuses_when_exhausted(self):
         from budget import BudgetExceeded, FileBudget
@@ -964,7 +976,7 @@ class TestARun(unittest.TestCase):
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-m")
-        for res, cost in (("failed", 0.02), ("failed", 0.03), ("validated", 0.05)):
+        for res, cost in (("failed", 0.02), ("failed", 0.03), ("completed", 0.05)):
             atask.main(["run", "start", "--dir", root, "--id", "a-m",
                         "--model", "mimo-v2.5"])
             from runs import list_open
@@ -978,8 +990,8 @@ class TestARun(unittest.TestCase):
         self.assertEqual(st["attempts"], 3)
         self.assertEqual(st["input_tokens"], 3000)
         self.assertAlmostEqual(st["cost_usd"], 0.10)
-        self.assertEqual(st["results"], ["failed", "failed", "validated"])
-        self.assertEqual(st["last_result"], "validated")
+        self.assertEqual(st["results"], ["failed", "failed", "completed"])
+        self.assertEqual(st["last_result"], "completed")
 
     def test_abandon_and_unknown_run_refused(self):
         from runs import list_open, read_runs
@@ -994,7 +1006,7 @@ class TestARun(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(read_runs(root, "a-q")[0]["result"], "abandoned")
         rc = atask.main(["run", "finish", "--dir", root, "--run", "r-deadbeef",
-                         "--result", "validated"])
+                         "--result", "completed"])
         self.assertEqual(rc, 1)
         self.assertEqual(list_open(root), [])
 
@@ -1018,6 +1030,118 @@ class TestARun(unittest.TestCase):
         self.assertEqual(o["attempts"], 1)
         self.assertEqual(o["tokens"]["in"], 500)
         self.assertEqual(o["cost_usd"], 0.01)
+
+
+class TestMinimalPass(unittest.TestCase):
+    """The six final-pass fixes: bypasses closed, accounting single-sourced."""
+
+    def test_done_cannot_bypass_stoplight(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-b")
+        for st in ("JUSTIFIED", "EXECUTING", "REPORTED"):
+            atask.set_status("a-b", st, root)
+        rr, vr = write_report(root, "a-b"), write_receipt(root, "a-b")
+        # Proof files attached but acceptance uncovered + no evidence:
+        # direct DONE must refuse with the stoplight reason.
+        ok, msg = atask.set_status("a-b", "DONE", root,
+                                   report_ref=rr, validation_ref=vr)
+        self.assertFalse(ok)
+        self.assertIn("stoplight", msg)
+        self.assertIn("uncovered", msg)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-b"]["status"], "REPORTED")  # restored, not dirty
+
+    def test_evidence_required_gates(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        q = os.path.join(root, "tasks.jsonl")
+        recs = atask.load(q)
+        recs.append({"id": "a-e", "tier": "A", "summary": "e",
+                     "acceptance": ["done"], "evidence_required": [
+                         {"kind": "command", "spec": "echo proven"},
+                         {"kind": "file", "spec": "reports/a-e.md"}],
+                     "blocked_by": [], "status": "REPORTED",
+                     "report_ref": "", "validation_ref": ""})
+        atask.save_all(recs, q)
+        atask.alog("a-e", "work", [0], root, "x", "")
+        write_report(root, "a-e")
+        recs = atask.load(q)
+        recs[0]["report_ref"] = "reports/a-e.md"
+        recs[0]["validation_ref"] = write_receipt(root, "a-e")
+        atask.save_all(recs, q)
+        sl = atask.stoplight("a-e", root)
+        self.assertTrue(sl["go"], sl)  # echo runs green, file exists
+        recs = atask.load(q)
+        recs[0]["evidence_required"] = [
+            {"kind": "command", "spec": "python3 -c \"import sys; sys.exit(9)\""}]
+        atask.save_all(recs, q)
+        sl = atask.stoplight("a-e", root)
+        self.assertFalse(sl["go"])
+        self.assertTrue(any("required[0]" in m for m in sl["missing"]))
+
+    def test_evidence_required_malformed_refused(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        rc = atask.main(["add", "--dir", root, "--id", "a-x",
+                         "--summary", "x", "--evidence", "vibes"])
+        self.assertEqual(rc, 1)
+
+    def test_alog_refuses_unknown_task(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        with self.assertRaises(ValueError):
+            atask.alog("a-ghost", "work", [0], root, "x", "")
+        rc = atask.main(["log", "--dir", root, "--id", "a-ghost",
+                         "--covers", "0"])
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(os.path.join(root, "a-logs", "a-ghost.jsonl")))
+
+    def test_single_run_class_with_full_schema(self):
+        import runs
+        src = open(os.path.join(HERE, "runs.py")).read()
+        self.assertEqual(src.count("@dataclass\nclass Run:"), 1)
+        r = runs.Run(task_id="a-x")
+        for f in ("input_tokens", "output_tokens", "cached_tokens",
+                  "token_source", "reported_cost_usd", "provider", "model",
+                  "worker", "ended_at", "duration_ms"):
+            self.assertIn(f, r.snapshot())
+
+    def test_mono_reboot_falls_back_to_wall(self):
+        import time as _t
+        from runs import Run
+        r = Run(task_id="a-x")
+        r.started_mono_ns = _t.monotonic_ns() + 10 ** 15  # simulated reboot
+        _t.sleep(0.02)
+        snap = r.finish("completed")
+        self.assertGreaterEqual(snap["duration_ms"], 0)
+        self.assertLess(snap["duration_ms"], 60000)  # wall-based, not garbage
+
+    def test_no_trust_only_tasks(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        rc = atask.main(["add", "--dir", root, "--id", "a-naked",
+                         "--summary", "x", "--accept", "y"])
+        self.assertEqual(rc, 1)
+        rc = atask.main(["add", "--dir", root, "--id", "a-ok",
+                         "--summary", "x", "--accept", "y",
+                         "--evidence", "command:echo ok"])
+        self.assertEqual(rc, 0)
+        add_task(root, "a-par", accept=(), ev=())
+        rc = atask.main(["spawn", "--dir", root, "--parent", "a-par",
+                         "--id", "a-kid", "--summary", "x",
+                         "--accept", "y"])
+        self.assertEqual(rc, 1)
+        # verify flags grandfathered trust-only records
+        q = os.path.join(root, "tasks.jsonl")
+        recs = atask.load(q)
+        recs.append({"id": "a-old", "tier": "A", "summary": "old",
+                     "acceptance": ["y"], "evidence_required": [],
+                     "blocked_by": [], "status": "PROPOSED",
+                     "report_ref": "", "validation_ref": ""})
+        atask.save_all(recs, q)
+        self.assertTrue(any("no trust-only" in f for f in atask.verify(root)))
 
 
 if __name__ == "__main__":

@@ -66,28 +66,6 @@ def verify_all(root: str | Path = "runs") -> dict:
 
 @dataclass
 class Run:
-    """One execution attempt at a task. Measurement is environment state:
-    wall clock says WHEN, monotonic clock says HOW LONG (NTP-immune).
-    Counters feed the BATS-style resource block; caps live on the goal
-    as context, never as kernel refusal."""
-    task_id: str
-    run_id: str = ""
-    attempt: int = 1
-    started_at: float = field(default_factory=time.time)
-    started_mono_ns: int = field(default_factory=time.monotonic_ns)
-    spent_usd: float = 0.0
-    tokens_used: int = 0
-    tool_calls: int = 0
-    finished: bool = False
-    outcome: str = ""
-
-    def __post_init__(self):
-        if not self.run_id:
-            import uuid as _uuid
-            self.run_id = "r-" + _uuid.uuid4().hex[:8]
-
-@dataclass
-class Run:
     """One execution attempt at a task (the A-RUN measurement primitive).
     Wall clock says WHEN, monotonic clock says HOW LONG (NTP-immune).
     Token counts are facts with a source; unknown stays null, never
@@ -117,7 +95,9 @@ class Run:
     validator: str = ""
 
     TOKEN_SOURCES = ("provider", "gateway", "agent", "estimated", "unknown")
-    RESULTS = ("running", "failed", "validated", "abandoned")
+    # Worker-declared outcomes only. "validated" is NEVER worker-set: it is
+    # derived downstream as (run completed + subsequent validator.passed).
+    RESULTS = ("running", "completed", "failed", "abandoned")
 
     def __post_init__(self):
         if not self.run_id:
@@ -163,11 +143,16 @@ class Run:
     def elapsed_ms(self) -> int:
         if self.duration_ms is not None:
             return self.duration_ms
-        return (time.monotonic_ns() - self.started_mono_ns) // 1_000_000
+        now = time.monotonic_ns()
+        if now < self.started_mono_ns:
+            # Rebooted mid-run: monotonic incomparable, fall back to wall.
+            base = self.ended_at or time.time()
+            return max(0, int((base - self.started_at) * 1000))
+        return (now - self.started_mono_ns) // 1_000_000
 
     def finish(self, result: str, validator: str = "") -> dict:
-        if result not in self.RESULTS or result == "running":
-            raise ValueError(f"bad result (choose: failed/validated/abandoned)")
+        if result not in self.RESULTS or result in ("running", "validated"):
+            raise ValueError("bad result (worker chooses: completed/failed/abandoned)")
         self.ended_at = time.time()
         self.duration_ms = self.elapsed_ms()
         self.result = result
@@ -244,7 +229,8 @@ def read_runs(root: str | Path, task_id: str = "") -> list[dict]:
 
 
 def task_run_stats(root: str | Path, task_id: str) -> dict:
-    """Derived per-task totals: duration/tokens/cost = Σ runs; attempts = n."""
+    """Derived per-task totals from A-RUNs ONLY (sole accounting source):
+    duration/tokens/cost = Σ runs; attempts = n runs."""
     runs = read_runs(root, task_id)
     tot = {"attempts": len(runs), "elapsed_ms": 0, "input_tokens": 0,
            "output_tokens": 0, "cached_tokens": 0, "cost_usd": 0.0,
@@ -261,14 +247,6 @@ def task_run_stats(root: str | Path, task_id: str) -> dict:
                 tot[k] += int(v)
         if r.get("reported_cost_usd") is not None:
             tot["cost_usd"] = round(tot["cost_usd"] + float(r["reported_cost_usd"]), 6)
-    # Legacy spend counters ride along so old data still totals.
-    try:
-        import atask as _at
-        recs = {x.get("id"): x for x in _at.load(Path(root) / "tasks.jsonl")}
-        rec = recs.get(task_id, {})
-        tot["cost_usd"] = round(tot["cost_usd"] + float(rec.get("spent_usd", 0.0) or 0.0), 6)
-    except Exception:
-        pass
     return tot
 
 

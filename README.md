@@ -13,7 +13,7 @@ python3 atask.py add --dir .atask --id a-run --summary "make it run" --accept "r
 python3 atask.py run start --dir .atask --id a-run --worker opencode --model mimo-v2.5
 # ... work happens, worker reports its receipt ...
 python3 atask.py run usage --dir .atask --run r-xxxx --input-tokens 48321 --output-tokens 7132 --cost 0.0831
-python3 atask.py run finish --dir .atask --run r-xxxx --result validated --validator pytest
+python3 atask.py run finish --dir .atask --run r-xxxx --result completed --validator pytest
 python3 driver.py pulse --dir .atask   # orders carry attempts/tokens/cost/last-validator
 python3 -m unittest discover tests
 ```

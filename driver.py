@@ -31,13 +31,24 @@ from events import emit as _emit, read as _eread
 
 
 def spent_totals(root: Path) -> dict:
-    """Recorded spend context (tiny fields, no caps, no refusal)."""
+    """Spend/tokens from A-RUNs ONLY (sole accounting source); attempts is
+    the lifecycle count on task records (includes still-open runs)."""
     usd, toks, tools, attempts = 0.0, 0, 0, 0
-    for r in load(Path(root) / "tasks.jsonl"):
-        usd = round(usd + float(r.get("spent_usd", 0.0) or 0.0), 6)
-        toks += int(r.get("spent_tokens", 0) or 0)
-        tools += int(r.get("tool_calls", 0) or 0)
-        attempts += int(r.get("attempts", 0) or 0)
+    try:
+        from runs import read_runs as _read
+        for r in _read(root):
+            if r.get("reported_cost_usd") is not None:
+                usd = round(usd + float(r["reported_cost_usd"]), 6)
+            for k in ("input_tokens", "output_tokens"):
+                if r.get(k) is not None:
+                    toks += int(r[k])
+    except Exception:
+        pass
+    try:
+        for t in load(Path(root) / "tasks.jsonl"):
+            attempts += int(t.get("attempts", 0) or 0)
+    except Exception:
+        pass
     return {"spent_usd": usd, "spent_tokens": toks, "tool_calls": tools,
             "attempts": attempts}
 
