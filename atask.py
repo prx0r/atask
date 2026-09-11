@@ -1319,7 +1319,28 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(str(e)[:160])
             return 1
-        _runs.append_finished(run, root)
+        if a.from_session:
+            # Metered close: pull provider counts first, so finished runs
+            # rarely stay null. Same honesty rules as usage (refuse unknown).
+            import importlib.util as _ilu2
+            mp2 = Path(__file__).resolve().parent / "meters" / "opencode_db.py"
+            spec2 = _ilu2.spec_from_file_location("meters_db2", mp2)
+            if spec2 is None or spec2.loader is None:
+                print("meters/opencode_db.py missing")
+                return 1
+            mod2 = _ilu2.module_from_spec(spec2)
+            spec2.loader.exec_module(mod2)
+            if not mod2.session_totals(a.from_session).get("found"):
+                print(f"unknown session in store: {a.from_session}")
+                return 1
+            mu2 = mod2.message_usage(a.from_session, a.since)
+            snap["input_tokens"] = mu2["in"]
+            snap["output_tokens"] = mu2["out"]
+            snap["token_source"] = "provider"
+            snap["reported_cost_usd"] = mu2["cost"] or None
+            _runs.append_finished(run, root, snap_override=snap)
+        else:
+            _runs.append_finished(run, root)
         _emit(root, "run.finished", task_id=run.task_id, run_id=run.run_id,
               outcome=a.result, elapsed_ms=snap["elapsed_ms"],
               cost_usd=run.reported_cost_usd, validator=a.validator)

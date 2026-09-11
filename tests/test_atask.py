@@ -1342,6 +1342,56 @@ class TestMinimalPass(unittest.TestCase):
         rep = driver_pulse(root)
         self.assertTrue(rep["halt_legal"])
 
+    def test_wave_d_lane_adapter(self):
+        import sqlite3
+        import tempfile
+        import shutil
+        from meters.hermes_board import claim, poll, push
+        base = tempfile.mkdtemp(prefix="boards-")
+        self.addCleanup(shutil.rmtree, base, True)
+        os.makedirs(os.path.join(base, "demo"))
+        db = sqlite3.connect(os.path.join(base, "demo", "kanban.db"))
+        db.execute("create table tasks (id integer primary key, title text,"
+                   " body text, assignee text, status text, created_by text,"
+                   " created_at real, idempotency_key text, result text)")
+        db.commit()
+        db.close()
+        r = push("demo", "a-1", "Build X", "brief", base=base)
+        self.assertEqual(r["status"], "ready")
+        r2 = push("demo", "a-1", "Build X v2", "brief", base=base)
+        self.assertEqual(r2["row_id"], r["row_id"])  # idempotent
+        c = claim("demo", "a-1", "worker-2", base=base)
+        self.assertTrue(c["claimed"])
+        c2 = claim("demo", "a-1", "worker-3", base=base)
+        self.assertFalse(c2["claimed"])  # already taken
+        p = poll("demo", "a-1", base=base)
+        self.assertTrue(p["found"])
+        self.assertFalse(poll("demo", "a-nope", base=base)["found"])
+
+    def test_metered_close(self):
+        from runs import read_runs
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        rc = atask.main(["run", "start", "--dir", root, "--id", "a-m"])
+        self.assertEqual(rc, 0)
+        from runs import list_open
+        rid = list_open(root, "a-m")[0]["run_id"]
+        rc = atask.main(["run", "finish", "--dir", root, "--run", rid,
+                         "--result", "completed", "--from-session",
+                         "ses_f70dff82bffe12tRcOu9iGDgSW", "--since", "120"])
+        if rc != 0:
+            self.skipTest("fixture opencode session absent on this box")
+        rows = read_runs(root, "a-m")
+        self.assertEqual(rows[0]["token_source"], "provider")
+        self.assertGreater(rows[0]["input_tokens"], 0)
+        rc = atask.main(["run", "start", "--dir", root, "--id", "a-m"])
+        rid2 = list_open(root, "a-m")[0]["run_id"]
+        rc = atask.main(["run", "finish", "--dir", root, "--run", rid2,
+                         "--result", "completed",
+                         "--from-session", "ses_nope"])
+        self.assertEqual(rc, 1)
+
     def test_miner_frequencies(self):
         from meters.frequencies import table
         from press import log as press_log

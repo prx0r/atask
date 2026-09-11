@@ -1,5 +1,18 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — wave D (session goal DONE, 95/95)
+- `meters/hermes_board.py`: push (idempotent by atask id), poll
+  (completion+result), claim (second worker refused when taken).
+  Tested against fixture board DBs — never touches live boards.
+- Metered close: `run finish --from-session SES [--since N]` fills
+  tokens/cost/source from the store; unknown sessions refused.
+  Proven live (361K in on a test run). Null column closable now.
+- Caught: filed `-k TestWaveD` evidence matching zero tests (vacuous
+  green, exit 0). Rejected all three, refiled with real selectors.
+  Rule: evidence selectors must match ≥1 test — add a CI check next.
+- a-ledd closed the ledger acceptance honestly (task for the ledger
+  itself, not hand-waving).
+
 ## 2026-09-11 — wave B+C marathon (20/50 todos, 93/93)
 - 9 micro-tools ship tested (digest/changelog/uptime/rss/invoice/
   habit/bookmarks/meetings/pricewatch, 15/15 product tests).

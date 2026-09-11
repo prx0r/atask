@@ -218,9 +218,10 @@ def list_open(root: str | Path, task_id: str = "") -> list[dict]:
     return out
 
 
-def append_finished(run: Run, root: str | Path) -> dict:
+def append_finished(run: Run, root: str | Path,
+                    snap_override: dict | None = None) -> dict:
     """Crash-safe close: append final record, remove the open stub."""
-    snap = run.snapshot()
+    snap = snap_override if snap_override is not None else run.snapshot()
     with open(Path(root) / RUNS_LOG, "a") as f:
         f.write(json.dumps(snap, sort_keys=True) + "\n")
     try:
