@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atask import goal_check, goal_get, load, open_h, ready, set_status, stoplight
+from budget import BudgetExceeded, FileBudget
 from events import emit as _emit, read as _eread
 
 
@@ -104,6 +105,12 @@ def pulse(root: Path) -> dict:
     except Exception as e:
         return {"error": f"queue unreadable: {e}"[:160],
                 "halt_legal": False, "elapsed_s": 0.0}
+    try:
+        FileBudget(root).check("pulse")
+    except BudgetExceeded as ex:
+        return {"error": str(ex)[:200], "halt_legal": False,
+                "elapsed_s": round(time.monotonic() - t0, 3),
+                "close": "refused: budget exhausted — raise caps or stop"}
     promoted, nogos = [], {}
     for r in recs:
         if r.get("status") != "REPORTED":
@@ -120,10 +127,11 @@ def pulse(root: Path) -> dict:
             nogos[r["id"]] = sl["missing"][:4]
             _emit(root, "validator.failed", task_id=r["id"],
                   reasons=sl["missing"][:4])
+    recs = load(q)  # refresh after promotions (single re-read)
     orders = [{"id": r.get("id"), "summary": (r.get("summary") or "")[:100],
                "acceptance": (r.get("acceptance") or [])[:3]}
-              for r in ready(load(q))]
-    still_reported = [r.get("id") for r in load(q)
+              for r in ready(recs)]
+    still_reported = [r.get("id") for r in recs
                       if r.get("status") == "REPORTED"]
     halt_legal = not orders and not nogos and not still_reported
     gc = goal_check(root)

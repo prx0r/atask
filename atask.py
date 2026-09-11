@@ -583,6 +583,11 @@ def main(argv: list[str] | None = None) -> int:
     p_ans.add_argument("--status", default="answered",
                        choices=("answered", "denied"))
     _dir(sub.add_parser("hlist"))
+    p_bud = _dir(sub.add_parser("budget"))
+    p_bud.add_argument("op", choices=("set", "show", "record", "check"))
+    p_bud.add_argument("--usd", default=None)
+    p_bud.add_argument("--tokens", default=None)
+    p_bud.add_argument("--label", default="")
 
     a = ap.parse_args(argv)
     root = Path(getattr(a, "dir", DEFAULT_DIR))
@@ -652,6 +657,14 @@ def main(argv: list[str] | None = None) -> int:
             if cost or toks:
                 _emit(root, "resource.used", task_id=a.id,
                       cost_usd=cost, tokens=toks)
+                # Enforced brake (SpendLimits): the crossing call completes
+                # and is fully logged; the NEXT metered call is refused.
+                try:
+                    from budget import BudgetExceeded, FileBudget
+                    FileBudget(root).record(tokens=toks, cost=cost or None,
+                                            label=a.id)
+                except BudgetExceeded as ex:
+                    out["budget_warning"] = str(ex)[:160]
         print(json.dumps(out))
         return 0
 
@@ -740,6 +753,44 @@ def main(argv: list[str] | None = None) -> int:
         for h in open_h(root):
             print(f"{h['id']} [{h.get('kind')}] task={h.get('task')} "
                   f"need={h.get('need','')[:80]}")
+        return 0
+
+    if a.cmd == "budget":
+        from budget import BudgetExceeded, FileBudget
+        b = FileBudget(root)
+        if a.op == "set":
+            try:
+                usd = float(a.usd) if a.usd is not None else None
+                toks = int(float(a.tokens)) if a.tokens is not None else None
+            except ValueError:
+                print("unparseable --usd/--tokens (must be numbers)")
+                return 1
+            b.set_caps(usd, toks)
+            print(json.dumps({"caps": b.snapshot()}))
+            return 0
+        if a.op == "show":
+            print(json.dumps(b.snapshot(), indent=1))
+            return 0
+        if a.op == "record":
+            try:
+                usd = float(a.usd) if a.usd is not None else None
+                toks = int(float(a.tokens)) if a.tokens is not None else 0
+            except ValueError:
+                print("unparseable --usd/--tokens (must be numbers)")
+                return 1
+            try:
+                b.record(tokens=toks, cost=usd, label=a.label)
+            except BudgetExceeded as ex:
+                print(str(ex)[:200])
+                return 1
+            print(json.dumps(b.snapshot(a.label)))
+            return 0
+        try:
+            b.check(a.label or "budget check")
+        except BudgetExceeded as ex:
+            print(str(ex)[:200])
+            return 1
+        print(json.dumps({"exhausted": False, **b.snapshot(a.label)}))
         return 0
     return 2
 

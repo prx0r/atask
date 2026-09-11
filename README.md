@@ -47,8 +47,9 @@ question) ride in every press row with question + context + choice;
 | `mcp_server.py` | Seven verbs over stdio |
 | `acheck.py` | Exit 0 = native |
 | `runs.py` | Content-addressed receipts + `Run` dataclass (mono timing, counters) |
+| `budget.py` | Enforced spend brake (SpendLimits: crossing call logs, next refused; pulse gate) |
 | `VALIDATORS.md` | Dummy-judge contract |
-| `staging/` | Pruned subsystems (budgets, lanes, triage) — Seed0-side, recoverable |
+| `staging/` | Pruned subsystems (lanes, triage) — Seed0-side, recoverable |
 
 ## State (per repo, `.atask/`)
 
@@ -76,3 +77,5 @@ L2 POLICY (outside: Seed0)
 
 If a feature does not help an agent communicate an externally verifiable
 state or request a bounded human decision, it does not belong in atask.
+Exception, by explicit order: the spend brake. Caps are the one refusal
+the kernel is allowed — everything else reports and lets policy decide.

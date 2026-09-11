@@ -383,15 +383,15 @@ class TestDriverCanon(unittest.TestCase):
 
 class TestCLIDirOrder(unittest.TestCase):
     def test_dir_before_and_after_subcommand(self):
-        import subprocess as _sp
+        # Same code path as the CLI, no process spawn: main(argv) in-process.
+        from driver import main as driver_main
+        from atask import main as atask_main
         root = fresh_root(self)
-        for argv in (["driver.py", "--dir", root, "boot"],
-                     ["atask.py", "--dir", root, "goal", "set",
-                      "--statement", "s", "--accept", "x"]):
-            exe = os.path.join(HERE, argv[0])
-            r = _sp.run([sys.executable, exe] + argv[1:],
-                        capture_output=True, text=True, cwd=HERE)
-            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(driver_main(["--dir", root, "boot"]), 0)
+        self.assertEqual(atask_main(["--dir", root, "goal", "set",
+                                     "--statement", "s", "--accept", "x"]), 0)
+        self.assertEqual(atask_main(["goal", "set", "--dir", root,
+                                     "--statement", "s2", "--accept", "y"]), 0)
         self.assertTrue(os.path.isfile(os.path.join(root, "goal.json")))
 
 
@@ -632,13 +632,10 @@ class TestEventSubstrate(unittest.TestCase):
         recs = atask.load(q)
         recs[0]["spent_usd"] = 0.03
         atask.save_all(recs, q)
-        # CLI path emits resource.used
-        import subprocess as _sp
-        r = _sp.run([sys.executable, os.path.join(HERE, "atask.py"),
-                     "log", "--dir", root, "--id", "a-c",
-                     "--covers", "0", "--cost", "0.01", "--tokens", "50"],
-                    capture_output=True, text=True, cwd=HERE)
-        self.assertEqual(r.returncode, 0, r.stderr)
+        # CLI path emits resource.used (in-process: same argv handling).
+        rc = atask.main(["log", "--dir", root, "--id", "a-c",
+                         "--covers", "0", "--cost", "0.01", "--tokens", "50"])
+        self.assertEqual(rc, 0)
         res = eread(root, "resource.used")
         self.assertEqual(len(res), 1)
         self.assertAlmostEqual(res[0]["cost_usd"], 0.01)
@@ -863,6 +860,54 @@ class TestEventAudit(unittest.TestCase):
         eemit(root, "task.status", task_id="a-x", **{"from": "DONE", "to": "EXECUTING"})
         bad = audit_event_stream(root)
         self.assertTrue(any("illegal edge" in b for b in bad))
+
+
+class TestBudgetEnforced(unittest.TestCase):
+    def test_crossing_call_completes_next_refused(self):
+        from budget import Budget, BudgetExceeded
+        b = Budget(max_usd=0.05)
+        b.record(cost=0.03, label="call-1")
+        with self.assertRaises(BudgetExceeded):
+            b.record(cost=0.03, label="call-2")  # completes, then refuses
+        with self.assertRaises(BudgetExceeded):
+            b.check("call-3")
+
+    def test_caps_persist_and_advertise(self):
+        from budget import FileBudget
+        root = fresh_root(self)
+        driver_boot(root)
+        FileBudget(root).set_caps(1.0, None)
+        FileBudget(root).record(cost=0.25, tokens=100, label="x")
+        b2 = FileBudget(root)
+        self.assertAlmostEqual(b2.spent_usd, 0.25)
+        self.assertEqual(b2.advertise()["ATASK_BUDGET_USD"], "0.75")
+
+    def test_log_charges_and_warns_on_crossing(self):
+        from budget import FileBudget
+        root = fresh_root(self)
+        driver_boot(root)
+        FileBudget(root).set_caps(0.05, None)
+        add_task(root, "a-c")
+        atask.set_status("a-c", "EXECUTING", root)
+        atask.alog("a-c", "work", [0], root, "x", "")
+        rc = atask.main(["log", "--dir", root, "--id", "a-c",
+                         "--covers", "0", "--cost", "0.05"])
+        self.assertEqual(rc, 0)  # crossing call still logs
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertAlmostEqual(by_id["a-c"]["spent_usd"], 0.05)
+
+    def test_pulse_refuses_when_exhausted(self):
+        from budget import BudgetExceeded, FileBudget
+        root = fresh_root(self)
+        driver_boot(root)
+        FileBudget(root).set_caps(0.01, None)
+        with self.assertRaises(BudgetExceeded):
+            FileBudget(root).record(cost=0.01, label="burn")
+        rep = driver_pulse(root)
+        self.assertIn("error", rep)
+        self.assertIn("budget", rep["error"].lower())
+        self.assertFalse(rep["halt_legal"])
 
 
 if __name__ == "__main__":

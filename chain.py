@@ -7,6 +7,7 @@ press must fail loudly, not execute something else).
 """
 from __future__ import annotations
 import json
+from functools import lru_cache as _lru
 from pathlib import Path
 
 ARG_KEYS = {"4"}
@@ -15,6 +16,7 @@ ALL_KEYS = set("0123456789")
 ROOT = Path(__file__).resolve().parent
 
 
+@_lru(maxsize=1)
 def key_defs() -> dict:
     return json.loads((ROOT / "keys.json").read_text())["keys"]
 

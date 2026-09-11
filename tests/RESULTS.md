@@ -1,5 +1,15 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — budgeting + speed session
+- Suite: **55/55 green** (~0.5s; was 0.61s — subprocess consolidation +
+  `key_defs` cache + single-read pulse; remainder is inherent spawn
+  coverage: validators/MCP/concurrent-pulse must fork).
+- Budgeting restored from staging by explicit order: `budget set/show/
+  record/check`, `log --cost/--tokens` charges (crossing call logs +
+  warns), exhausted pulse refuses fail-closed. 4 new `TestBudgetEnforced`.
+  Goal caps stay as forecast context; `budgets.json` is the brake.
+- Boundary rule amended: the spend brake is the kernel's one allowed refusal.
+
 ## 2026-09-11 — self-hosted autonomous run (session `selfhost1`, GOAL_DONE)
 - Dogfooded the kernel: `.atask/` queue in-repo (gitignored), goal with
   3 acceptance, 3 tasks worked start→DONE via CLI + pulses. acheck 0,
