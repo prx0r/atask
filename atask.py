@@ -657,6 +657,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--cached-tokens", default=None)
     p_run.add_argument("--token-source", default="agent")
     p_run.add_argument("--cost", default=None)
+    p_run.add_argument("--from-session", default=None,
+                       help="pull real counts from opencode session store")
+    p_run.add_argument("--since", type=float, default=0,
+                       help="with --from-session: attribute messages in last N minutes (0=all)")
     p_run.add_argument("--result", default="completed",
                        choices=("completed", "failed", "abandoned"))
     p_run.add_argument("--validator", default="")
@@ -894,6 +898,30 @@ def main(argv: list[str] | None = None) -> int:
             _emit(root, "resource.used", task_id=run.task_id, run_id=run.run_id,
                   cost_usd=run.reported_cost_usd, tokens=run.output_tokens,
                   token_source=run.token_source, model=run.model)
+            if a.from_session:
+                # Winner wiring: real provider counts from opencode's store.
+                import importlib.util as _ilu
+                mp = Path(__file__).resolve().parent / "meters" / "opencode_db.py"
+                spec = _ilu.spec_from_file_location("meters_db", mp)
+                if spec is None or spec.loader is None:
+                    print("meters/opencode_db.py missing")
+                    return 1
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if not mod.session_totals(a.from_session).get("found"):
+                    print(f"unknown session in store: {a.from_session}")
+                    return 1
+                mu = mod.message_usage(a.from_session, a.since)
+                run.usage(input_tokens=mu["in"], output_tokens=mu["out"],
+                          token_source="provider",
+                          reported_cost_usd=mu["cost"] or None,
+                          model=run.model, provider=run.provider,
+                          worker=run.worker)
+                _runs.save_open(run, root)
+                _emit(root, "resource.used", task_id=run.task_id,
+                      run_id=run.run_id, cost_usd=run.reported_cost_usd,
+                      tokens=run.output_tokens, token_source="provider",
+                      model=run.model)
             # The usage receipt IS the metered call: charge the brake here
             # (single spend path — no double-count). Crossing completes + warns.
             out = run.snapshot()

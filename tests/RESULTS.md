@@ -1,5 +1,24 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — token telemetry goal (session `tokens1`, GOAL_DONE)
+- 7 tasks (research, alts, 5 verdicts) worked strictly: run-tracked,
+  a-logged, receipted, pulsed to DONE. Suite **69/69**.
+- Answer: tokens were null because no worker ever looked. `opencode.db`
+  on-box meters everything (session + per-message tables). This session:
+  2.5M in / 189K out / $0.52 at research time.
+- Verdicts: ALT1 session totals PASS; ALT2 message-window PASS (149
+  msgs/1.1M per 30m); ALT3 estimation FAIL on stored text (0.02x —
+  valid only on true prompt text at call time); ALT4 delta WEAK PASS
+  (session row lags ~45s; use ALT2 per run); ALT5 Hermes FAIL
+  (sporadic debug dumps + live Bearer key in headers — flagged, owner
+  must rotate; never ingest blindly).
+- Adopted: `meters/opencode_db.py` (L1 adapter, read-only sqlite) +
+  `run usage --from-session SES [--since MIN]` pulls provider counts
+  into the run (unknown sessions refused, no silent zeros). Runs now
+  show real tokens; digest spent reflects brake charges.
+- Strictness note: caught myself skipping a-log discipline earlier in
+  the day; this whole goal ran clean to prove the loop holds.
+
 ## 2026-09-11 — pull review: 13 commits, 68 tests, remote current
 Remote `prx0r/atask` == local through `baf7bfb`. Suite 68/68 (~0.9s).
 Reviewed the whole stack as if it arrived as one PR:

@@ -993,6 +993,68 @@ class TestARun(unittest.TestCase):
         self.assertEqual(st["results"], ["failed", "failed", "completed"])
         self.assertEqual(st["last_result"], "completed")
 
+    def test_from_session_wiring(self):
+        import tempfile
+        import shutil
+        from meters.opencode_db import calibration, message_usage, session_totals
+        import sqlite3
+        tmp = tempfile.mkdtemp(prefix="meters-test-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        dbp = os.path.join(tmp, "t.db")
+        db = sqlite3.connect(dbp)
+        db.execute("create table session (id text, title text, model text, agent text,"
+                   " tokens_input int, tokens_output int, tokens_reasoning int,"
+                   " tokens_cache_read int, tokens_cache_write int, cost real)")
+        db.execute("create table message (id text, session_id text, time_created int,"
+                   " time_updated int, data text)")
+        import json as _j, time as _t
+        db.execute("insert into session values (?,?,?,?,?,?,?,?,?,?)",
+                   ("ses_1", "t", "{}", "build", 1000, 200, 0, 0, 0, 0.05))
+        now_ms = int(_t.time() * 1000)
+        assistant = _j.dumps({"role": "assistant", "cost": 0.01,
+                              "tokens": {"input": 500, "output": 100, "reasoning": 0}})
+        db.execute("insert into message values (?,?,?,?,?)",
+                   ("m1", "ses_1", now_ms, now_ms, assistant))
+        db.execute("insert into message values (?,?,?,?,?)",
+                   ("m2", "ses_1", now_ms, now_ms, _j.dumps({"role": "user"})))
+        db.commit()
+        db.close()
+        st = session_totals("ses_1", dbp)
+        self.assertTrue(st["found"])
+        self.assertEqual(st["tokens_input"], 1000)
+        self.assertFalse(session_totals("ses_nope", dbp)["found"])
+        mu = message_usage("ses_1", 0, dbp)
+        self.assertEqual(mu["messages"], 1)  # user message excluded
+        self.assertEqual(mu["in"], 500)
+        cal = calibration("ses_1", dbp)
+        self.assertIsNotNone(cal["ratio_est_over_actual"])
+        # end-to-end through run usage against the real store
+        # (skipped where the fixture session doesn't exist: other machines)
+        from meters.opencode_db import session_totals as _st
+        try:
+            live = _st("ses_f70dff82bffe12tRcOu9iGDgSW")["found"]
+        except Exception:
+            live = False
+        if not live:
+            self.skipTest("fixture opencode session absent on this box")
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        rc = atask.main(["run", "start", "--dir", root, "--id", "a-m"])
+        self.assertEqual(rc, 0)
+        from runs import list_open
+        rid = list_open(root, "a-m")[0]["run_id"]
+        rc = atask.main(["run", "usage", "--dir", root, "--run", rid,
+                         "--from-session", "ses_f70dff82bffe12tRcOu9iGDgSW",
+                         "--since", "120"])
+        self.assertEqual(rc, 0)
+        run = list_open(root, "a-m")[0]
+        self.assertEqual(run["token_source"], "provider")
+        self.assertGreater(run["input_tokens"], 1000000)  # real session volume
+        rc = atask.main(["run", "usage", "--dir", root, "--run", rid,
+                         "--from-session", "ses_nope"])
+        self.assertEqual(rc, 1)  # unknown session refused, no silent zeros
+
     def test_abandon_and_unknown_run_refused(self):
         from runs import list_open, read_runs
         root = fresh_root(self)
