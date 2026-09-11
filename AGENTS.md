@@ -29,6 +29,9 @@ Binding rules for any coding agent working with this harness.
    claims without a live run; exit codes never masked by pipes.
 7. **Small diffs, tested each step.** Regression test per fix; keep the
    suite green (`python3 -m unittest discover tests`).
+8. **Every turn ends with the 5 next actions.** Run `driver.py next`;
+   output the 5 state-derived next A-tasks with their evidence
+   justification. No turn ends without them — repeat every time.
 
 ## Adopting this harness in a repo
 
