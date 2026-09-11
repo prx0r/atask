@@ -1,85 +1,61 @@
-# atask — the canonical autonomous agent harness (one shape everywhere)
+# atask — the control language for one autonomous agent
 
-Stdlib-only Python. No install beyond `git clone` + Python 3.11. Any agent —
-opencode, Claude Code, cron job, other VPS — becomes A-task native by
-following `ATASK.md` (one page) and passing `acheck.py` (exit 0).
+Stdlib-only Python. No install beyond clone + Python 3.11. atask knows
+nothing about building software: its entire job is goal → autonomous work
+→ externally validated claims → bounded human decisions (0–9) → record →
+continue. Learning how you press belongs one layer up (Seed0); this repo
+only guarantees the presses are worth learning from.
 
 ```bash
 python3 atask.py init --dir .atask
-python3 atask.py goal set --dir .atask --statement "ship demo" --accept "demo runs" --accept "docs exist"
-python3 atask.py add --dir .atask --id a-run --summary "make demo run" --accept "demo runs" --covers-goal 0
-python3 atask.py justify --dir .atask --id a-run && python3 atask.py execute --dir .atask --id a-run
-python3 atask.py log --dir .atask --id a-run --covers 0 --evidence "command:./demo --self-test"
-python3 atask.py report --dir .atask --id a-run --report reports/a-run.md --receipt sha256:...
-python3 driver.py pulse --dir .atask     # promotes to DONE iff stoplight green
-python3 atask.py goal check --dir .atask # exit 0 = goal done
-python3 acheck.py --dir .atask           # exit 0 = native
-python3 -m unittest discover tests       # harness self-tests (23 green)
+python3 atask.py goal set --dir .atask --statement "ship demo" --accept "demo runs"
+python3 atask.py add --dir .atask --id a-run --summary "make it run" --accept "runs" --covers-goal 0
+# ... work, log, report, receipt ...
+python3 driver.py pulse --dir .atask
+python3 instrument.py press 0 --dir .atask --session build1   # accept
+python3 instrument.py digest --dir .atask --session build1    # outcome row
+python3 -m unittest discover tests                            # 36 green
 ```
 
-Branch deeper with `spawn`, park on humans with `escalate` / resume with
-`answer`, judge logs with per-task `validators/<id>.py` (see VALIDATORS.md).
-Cap spend with `budget set` (SpendLimits semantics: the crossing call
-completes, the next is refused; exhausted budget refuses the pulse).
-Delegate across agents with frozen briefs (`delegate --to`, see
-DELEGATION.md). Route every step with `policy` (prohibited blocks in code;
-spend → M, human/irreversible → H, else A). Repo config lives in
-`.atask/atask.yaml` (caps, extra prohibited patterns).
+## The seven verbs (MCP)
 
-| File | Role |
-|---|---|
-| `budget.py` | Durable spend brake (`budgets.json`, env advertise) |
-| `agents/` | Default delegation lanes (analyst/coder/architect, Cursor-style frontmatter) |
-| `DELEGATION.md` | Triage doctrine: cheapest-capable first, Kanban not function calls |
+`a_goal` (exit-truth) · `a_status` (start every turn here) · `a_task`
+(READY orders) · `a_proof` (GO/NOGO per task) · `a_ask` (open questions:
+kind/options/recommendation — all the agent may ask) · `a_answer` (HUMAN
+SIDE: digits) · `a_done` (pulse promotes iff green). The MCP is read-only;
+digits write. Config: `{"mcp": {"atask": {"type": "local", "command":
+["python3", "/path/to/atask/mcp_server.py", "--dir", "/path/to/.atask"]}}}`.
+
+## The keypad
+
+0 accept (=GO when idle) · 1 orders · 2 status · 3 blockers · 4 pick 1–7 ·
+5 approve · 6 deny · 7 answer/correction · 8 expand · 9 halt. Modes (idle /
+question) ride in every press row with question + context + choice;
+`digest` appends the session outcome. Seed0 joins on session.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `ATASK.md` | One-page contract: goal → tasks → alogs → validator → done |
-| `atask.py` | Queue core: goal/spawn/log/stoplight/escalate/answer/done-gate/budget/policy |
-| `driver.py` | Autonomous pulse: `boot` / `pulse` (one tick) / `run` (to halt-legal) |
-| `instrument.py` | 10-key control harness: `press <chain>` (digits), `presses` (the log) |
-| `keys.json` + `chain.py` | Key contract + digit grammar (only 4 takes a digit) |
-| `press.py` | Press rows in predictor shape: shown/picked/context/outcome |
-| `mcp_server.py` | Read-only A-language tools over stdio (agent reads, digits write) |
-| `acheck.py` | Self-audit: exit 0 = A-task native |
-| `runs.py` | Content-addressed receipts (`sha256:` ids, tamper-evident) |
-| `VALIDATORS.md` | The dummy-judge contract + minimal example |
-| `AGENTS.md` | Binding laws for agents working under this harness |
-| `tests/` | Self-tests (stdlib unittest, no deps) |
+| `ATASK.md` | The contract (paste into any agent's instructions) |
+| `atask.py` | Queue: goal/spawn/log/stoplight/ask-gate/escalate/answer/done-gate/verify |
+| `driver.py` | `boot` / `pulse` / `run` — mechanical promotion + orders + spend totals |
+| `instrument.py` | `press` / `presses` / `digest` — digits in, dataset out |
+| `keys.json` + `chain.py` | Key contract + digit grammar |
+| `press.py` | Predictor-shaped rows (shown/picked/question/context/choice) |
+| `mcp_server.py` | Seven verbs over stdio |
+| `acheck.py` | Exit 0 = native |
+| `runs.py` | Content-addressed receipts |
+| `VALIDATORS.md` | Dummy-judge contract |
+| `staging/` | Pruned subsystems (budgets, lanes, triage) — Seed0-side, recoverable |
 
-## Control harness (the 0-9 endgame)
+## State (per repo, `.atask/`)
 
-Give the agent the MCP (`mcp_server.py`); it speaks A-language and surfaces
-needs only as h-tasks. You answer in digits (`instrument.py press <chain>`):
-1 GO · 2 ZOOM · 3 DIG · 4 PICK#n · 5 OK · 6 NO · 7 TELL · 8 GOAL · 9 FIX ·
-0 STOP. Every press logs a predictor-shaped row to `presses.jsonl` — the
-start-to-end sequence of a build, ready to model and automate later.
+`goal.json` · `tasks.jsonl` · `h-tasks.jsonl` · `a-logs/` · `reports/`
+(validators check 5 sections) · `validators/` · `runs/` · `presses.jsonl`
+· `corrections.jsonl` · `pulse.jsonl` · `HALT.json`.
 
-```bash
-python3 instrument.py press 2 --dir .atask --session build1
-python3 instrument.py press 41 --dir .atask --session build1   # PICK#1
-python3 instrument.py presses --dir .atask
-```
+## Boundary rule (what belongs here)
 
-## State (per adopting repo, default `.atask/`)
-
-`goal.json` (one active end-state) · `tasks.jsonl` (the queue) ·
-`h-tasks.jsonl` (human queue) · `a-logs/<id>.jsonl` (action lines) ·
-`reports/*.md` (claim, evidence, self-review, needs, cost) ·
-`validators/*.py` (dummy judges) · `runs/sha256_*.json` (receipts) ·
-`pulse.jsonl` (driver ticks).
-
-## Autonomy
-
-Cron fires `driver.py pulse`; the agent drains the READY orders it emits;
-goal progress + open humans ride every pulse. Judgment stays with the
-agent; verification stays mechanical. Next layer up (not here): the 10-key
-press instrument + phone dashboard (digits + voice) over any `.atask/` dir.
-
-## Cron
-
-```cron
-*/15 * * * * cd /path/to/repo && python3 /path/to/atask/driver.py pulse --dir .atask >> .atask/driver.log 2>&1
-```
+If a feature does not help an agent communicate an externally verifiable
+state or request a bounded human decision, it does not belong in atask.

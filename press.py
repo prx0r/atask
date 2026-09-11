@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 
 PRESSES = "presses.jsonl"
-SHOWN = ["GO", "ZOOM", "DIG", "PICK", "OK", "NO", "TELL", "GOAL", "FIX", "STOP"]
+SHOWN = ["GO", "ZOOM", "DIG", "PICK", "OK", "NO", "TELL", "MORE", "STOP", "ACCEPT"]
 # index i == key str((i + 1) % 10): position 0 is "1" ... position 9 is "0".
 
 

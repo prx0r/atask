@@ -294,7 +294,7 @@ class TestHumanQueue(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-need")
         add_task(root, "a-dep", blocked=("a-need",))
-        ok, hid = h_escalate(root, "a-need", "which API key?",
+        ok, hid = h_escalate(root, "a-need", "which API key?", "SECRET",
                              ["key-a", "key-b"], "key-a",
                              predicted={"key": "key-a"})
         self.assertTrue(ok, hid)
@@ -313,6 +313,19 @@ class TestHumanQueue(unittest.TestCase):
         # dependent ran on stale prediction -> must re-verify, not stay DONE
         self.assertEqual(by_id["a-dep"]["status"], "EXECUTING")
         self.assertEqual(acheck_check(root), [])
+
+    def test_ask_gate_refuses_non_boundary(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-lib")
+        ok, msg = h_escalate(root, "a-lib", "which python library?", "VIBES")
+        self.assertFalse(ok)
+        self.assertIn("not a human boundary", msg)
+        ok, hid = h_escalate(root, "a-lib", "which region?", "PREFERENCE",
+                             ["eu", "us"], "eu")
+        self.assertTrue(ok, hid)
+        hs = {h["id"]: h for h in atask.hload(root)}
+        self.assertEqual(hs[hid]["kind"], "PREFERENCE")
 
 
 class TestValidators(unittest.TestCase):
@@ -360,11 +373,12 @@ class TestDriverCanon(unittest.TestCase):
         driver_boot(root)
         goal_set(root, "g", ["x"])
         add_task(root, "a-h")
-        h_escalate(root, "a-h", "decide?")
+        h_escalate(root, "a-h", "decide?", "PREFERENCE")
         rep = driver_pulse(root)
         self.assertIn("open_h", rep)
         self.assertEqual(len(rep["open_h"]), 1)
         self.assertIn("goal", rep)
+        self.assertIn("spent", rep)
 
 
 class TestCLIDirOrder(unittest.TestCase):
@@ -381,201 +395,154 @@ class TestCLIDirOrder(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(root, "goal.json")))
 
 
-class TestBudget(unittest.TestCase):
-    def test_record_then_refuse_next(self):
-        from budget import Budget, BudgetExceeded, FileBudget
-        b = Budget(max_usd=0.05)
-        b.record(cost=0.03, label="call-1")
-        self.assertFalse(b.exhausted())
-        with self.assertRaises(BudgetExceeded):
-            b.record(cost=0.03, label="call-2")  # crosses: completes, then refuses
-        with self.assertRaises(BudgetExceeded):
-            b.check("call-3")
-
-    def test_file_budget_survives_restart(self):
-        from budget import FileBudget
-        root = fresh_root(self)
-        driver_boot(root)
-        b = FileBudget(root)
-        b.set_caps(1.0, None)
-        b.record(cost=0.25, tokens=100, label="x")
-        b2 = FileBudget(root)  # fresh object, same file
-        self.assertAlmostEqual(b2.spent_usd, 0.25)
-        self.assertEqual(b2.spent_tokens, 100)
-        adv = b2.advertise()
-        self.assertEqual(adv["ATASK_BUDGET_USD"], "0.75")
-
-    def test_unpriced_counts_not_charges(self):
-        from budget import Budget
-        b = Budget(max_usd=0.01)
-        b.record(label="cached")  # no cost: invisible spend, counted
-        self.assertEqual(b.unpriced, 1)
-        self.assertFalse(b.exhausted())
-
-    def test_driver_refuses_when_exhausted(self):
-        root = fresh_root(self)
-        driver_boot(root)
-        from budget import FileBudget
-        FileBudget(root).set_caps(0.01, None)
-        from budget import BudgetExceeded
-        with self.assertRaises(BudgetExceeded):
-            FileBudget(root).record(cost=0.01, label="burn")
-        rep = driver_pulse(root)
-        self.assertIn("error", rep)
-        self.assertIn("budget", rep["error"].lower())
-
-    def test_yaml_caps_seed_budget(self):
-        root = fresh_root(self)
-        driver_boot(root)
-        with open(os.path.join(root, "atask.yaml"), "w") as f:
-            f.write("budget_usd: 2.5\n")
-        from driver import budget_state
-        snap = budget_state(root)["snapshot"]
-        self.assertEqual(snap["max_usd"], 2.5)
-
-
-class TestDelegate(unittest.TestCase):
-    def test_delegate_freezes_brief_and_pins_sha(self):
-        from atask import agents_list, delegate
-        root = fresh_root(self)
-        driver_boot(root)
-        self.assertTrue(any(a["name"] == "coder" for a in agents_list(root)))
-        add_task(root, "a-par")
-        ok, msg = delegate(root, "a-par", "a-sub", "coder",
-                           "implement exactly X with tests")
-        self.assertTrue(ok, msg)
-        by_id = {r["id"]: r for r in
-                 atask.load(os.path.join(root, "tasks.jsonl"))}
-        self.assertIn("a-sub", by_id["a-par"]["blocked_by"])
-        dg = by_id["a-sub"]["delegate"]
-        self.assertEqual(dg["agent"], "coder")
-        bp = os.path.join(root, dg["brief_ref"])
-        self.assertTrue(os.path.isfile(bp))
-        import hashlib as _h
-        sha = _h.sha256(open(bp, "rb").read()).hexdigest()[:16]
-        self.assertEqual(dg["brief_sha"], sha)
-
-    def test_delegate_unknown_lane_refused(self):
-        from atask import delegate
-        root = fresh_root(self)
-        driver_boot(root)
-        add_task(root, "a-par")
-        ok, msg = delegate(root, "a-par", "a-sub", "oracle", "do magic")
-        self.assertFalse(ok)
-        self.assertIn("unknown agent lane", msg)
-
-
-class TestPolicy(unittest.TestCase):
-    def test_prohibited_is_code(self):
-        from atask import policy_check
-        root = fresh_root(self)
-        driver_boot(root)
-        self.assertEqual(policy_check(root, "git push --force")["verdict"], "PROHIBITED")
-        self.assertEqual(policy_check(root, "rm -rf /")["verdict"], "PROHIBITED")
-
-    def test_routes_spend_and_human(self):
-        from atask import policy_check
-        root = fresh_root(self)
-        driver_boot(root)
-        self.assertEqual(policy_check(root, "pay the $5 invoice")["route"], "M")
-        self.assertEqual(policy_check(root, "merge the PR")["route"], "H")
-        self.assertEqual(policy_check(root, "run pytest tests/ -q")["route"], "A")
-
-    def test_repo_can_extend_prohibited(self):
-        from atask import policy_check
-        root = fresh_root(self)
-        driver_boot(root)
-        with open(os.path.join(root, "atask.yaml"), "a") as f:
-            f.write("prohibited:\n  - 'fortnite'\n")
-        rep = policy_check(root, "deploy fortnite behaviour")
-        self.assertEqual(rep["verdict"], "PROHIBITED")
-
-
 class TestControlHarness(unittest.TestCase):
     def test_chain_grammar(self):
         from chain import describe, parse
-        acts = parse("29341")
+        acts = parse("20841")
         self.assertEqual([(a["key"], a["name"], a["arg"]) for a in acts],
-                         [("2", "ZOOM", None), ("9", "FIX", None),
-                          ("3", "DIG", None), ("4", "PICK", 1)])
+                         [("2", "ZOOM", None), ("0", "ACCEPT", None),
+                          ("8", "MORE", None), ("4", "PICK", 1)])
         self.assertIn("ZOOM", describe(acts))
         with self.assertRaises(ValueError):
             parse("4")  # PICK needs a digit
         with self.assertRaises(ValueError):
             parse("2x9")
 
-    def test_press_log_shape(self):
-        from press import key_index, log, read
-        self.assertEqual(key_index("1"), 0)
-        self.assertEqual(key_index("0"), 9)
-        root = fresh_root(self)
-        driver_boot(root)
-        row = log(root, "s-build", "5", None, "5", {"open_h": []}, {"ok": True})
-        self.assertEqual(row["picked"], 4)
-        self.assertEqual(row["picked_text"], "OK")
-        self.assertEqual(len(row["shown"]), 10)
-        self.assertEqual(len(read(root)), 1)
-
-    def test_digits_answer_humans(self):
+    def test_press_row_carries_question_and_context(self):
         from instrument import run
         from press import read as press_read
         root = fresh_root(self)
         driver_boot(root)
+        goal_set(root, "g", ["x"])
         add_task(root, "a-need")
-        h_escalate(root, "a-need", "pick one?", ["aa", "bb"], "aa")
-        rep = run("240", session="s1", root=root)  # ZOOM then PICK#0
-        self.assertTrue(all(r["ok"] for r in rep["results"]), rep)
-        by_id = {r["id"]: r for r in
-                 atask.load(os.path.join(root, "tasks.jsonl"))}
-        self.assertEqual(by_id["a-need"]["status"], "EXECUTING")
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        recs[0]["covers_goal"] = [0]
+        atask.save_all(recs, os.path.join(root, "tasks.jsonl"))
+        h_escalate(root, "a-need", "pick one?", "PREFERENCE", ["aa", "bb"], "aa")
+        rep = run("0", session="s1", root=root)  # ACCEPT = recommended
+        self.assertTrue(rep["results"][0]["ok"], rep)
         rows = press_read(root)
-        self.assertEqual([r["picked_text"] for r in rows], ["ZOOM", "PICK"])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["picked_text"], "ACCEPT")
+        self.assertEqual(row["context"]["mode"], "question")
+        q = row["context"]["question"]
+        self.assertEqual(q["kind"], "PREFERENCE")
+        self.assertEqual(q["options"], ["aa", "bb"])
+        self.assertEqual(q["recommended"], "aa")
+        self.assertIn("goal_progress", row["context"]["context"])
+        self.assertIn("spent_usd", row["context"]["context"])
+        by_h = {h["id"]: h for h in atask.hload(root)}
+        self.assertEqual(list(by_h.values())[0]["answer"],
+                         "accepted recommendation: aa")
 
-    def test_ok_no_tell(self):
+    def test_zero_is_go_when_idle(self):
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-r")
+        atask.set_status("a-r", "JUSTIFIED", root)
+        rep = run("0", session="s1", root=root)
+        self.assertIn("a-r", rep["results"][0]["close"])
+
+    def test_pick_options_1_to_7(self):
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-need")
+        h_escalate(root, "a-need", "pick?", "PREFERENCE", ["aa", "bb"], "bb")
+        rep = run("41", session="s1", root=root)  # PICK#1
+        self.assertTrue(rep["results"][0]["ok"], rep)
+        self.assertIn("option 1", rep["results"][0]["close"])
+        rep = run("49", session="s1", root=root)  # nothing open now
+        self.assertFalse(rep["results"][0]["ok"])
+
+    def test_eight_expands_nine_halts(self):
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-need")
+        h_escalate(root, "a-need", "pick?", "AMBIGUITY", ["aa"], "aa")
+        rep = run("8", session="s1", root=root)
+        self.assertEqual(rep["results"][0]["action"], "expand")
+        self.assertIn("AMBIGUITY", rep["results"][0]["close"])
+        rep = run("9", session="s1", root=root)
+        self.assertIn("halted", rep["results"][0]["close"])
+        rep = run("1", session="s1", root=root)
+        self.assertFalse(rep["results"][0]["ok"])  # executing refused
+        rep = run("2", session="s1", root=root)
+        self.assertTrue(rep["results"][0]["ok"])  # readonly survives
+        rep = run("9", session="s1", root=root)
+        self.assertIn("resumed", rep["results"][0]["close"])
+
+    def test_seven_answers_or_files_correction(self):
         from instrument import run
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-t")
-        h_escalate(root, "a-t", "say something?")
+        h_escalate(root, "a-t", "say something?", "SECRET")
         rep = run("7", session="s1", root=root, payloads={"7": "hello human"})
-        self.assertTrue(rep["results"][0]["ok"])
-        add_task(root, "a-t2")
-        h_escalate(root, "a-t2", "approve?")
-        rep = run("5", session="s1", root=root)
-        self.assertIn("approved", rep["results"][0]["close"])
-        add_task(root, "a-t3")
-        h_escalate(root, "a-t3", "approve?")
-        rep = run("6", session="s1", root=root)
-        self.assertIn("denied", rep["results"][0]["close"])
-        by_h = {h["id"]: h for h in atask.hload(root)}
-        denied = [h for h in by_h.values() if h.get("status") == "denied"]
-        self.assertEqual(len(denied), 1)
+        self.assertEqual(rep["results"][0]["action"], "tell")
+        rep = run("7", session="s1", root=root, payloads={"7": "note: retry later"})
+        self.assertEqual(rep["results"][0]["action"], "fix")
+        self.assertIn("correction", rep["results"][0]["close"])
 
     def test_tell_refuses_secrets(self):
         from instrument import run
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-s")
-        h_escalate(root, "a-s", "give input")
+        h_escalate(root, "a-s", "give input", "SECRET")
         rep = run("7", session="s1", root=root,
                   payloads={"7": "my api_key: hunter2hunter2"})
         self.assertFalse(rep["results"][0]["ok"])
         self.assertIn("secret-refused", rep["results"][0]["action"])
 
-    def test_halt_blocks_executing_not_readonly(self):
+    def test_ok_no_deny(self):
         from instrument import run
         root = fresh_root(self)
         driver_boot(root)
-        rep = run("0", session="s1", root=root)
-        self.assertIn("halted", rep["results"][0]["close"])
-        rep = run("1", session="s1", root=root)
-        self.assertFalse(rep["results"][0]["ok"])  # executing refused
-        rep = run("2", session="s1", root=root)
-        self.assertTrue(rep["results"][0]["ok"])  # readonly survives
-        rep = run("0", session="s1", root=root)
-        self.assertIn("resumed", rep["results"][0]["close"])
+        add_task(root, "a-t2")
+        h_escalate(root, "a-t2", "approve?", "AUTHORIZATION")
+        rep = run("5", session="s1", root=root)
+        self.assertIn("approved", rep["results"][0]["close"])
+        add_task(root, "a-t3")
+        h_escalate(root, "a-t3", "approve?", "AUTHORIZATION")
+        rep = run("6", session="s1", root=root)
+        self.assertIn("denied", rep["results"][0]["close"])
+        by_h = {h["id"]: h for h in atask.hload(root)}
+        denied = [h for h in by_h.values() if h.get("status") == "denied"]
+        self.assertEqual(len(denied), 1)
 
-    def test_mcp_roundtrip(self):
+    def test_digest_closes_session_with_outcome(self):
+        from instrument import digest, run
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "g", ["x"])
+        add_task(root, "a-r")
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        recs[0]["covers_goal"] = [0]
+        atask.save_all(recs, os.path.join(root, "tasks.jsonl"))
+        run("2", session="s9", root=root)
+        out = digest(root, "s9")
+        self.assertEqual(out["session"], "s9")
+        self.assertIn("goal_done", out["outcome"])
+        self.assertIn("spent_usd", out["outcome"])
+        self.assertEqual(out["outcome"]["presses"], 1)
+
+    def test_spend_is_recorded_context(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-c")
+        atask.alog("a-c", "work", [0], root, "x", "")
+        q = os.path.join(root, "tasks.jsonl")
+        recs = atask.load(q)
+        recs[0]["spent_usd"] = 0.72
+        atask.save_all(recs, q)
+        from driver import spent_totals
+        self.assertAlmostEqual(spent_totals(root)["spent_usd"], 0.72)
+
+    def test_mcp_seven_verbs(self):
         import subprocess as _sp
         root = fresh_root(self)
         driver_boot(root)
@@ -595,15 +562,18 @@ class TestControlHarness(unittest.TestCase):
             self.assertEqual(rpc(1, "initialize")["result"]["serverInfo"]["name"], "atask")
             tools = rpc(2, "tools/list")["result"]["tools"]
             names = {t["name"] for t in tools}
-            self.assertTrue({"atask_zoom", "atask_ready", "atask_humans",
-                             "atask_presses"} <= names)
+            self.assertEqual(names, {"a_goal", "a_status", "a_task",
+                                     "a_proof", "a_ask"})
             out = rpc(3, "tools/call",
-                      {"name": "atask_ready", "arguments": {}})["result"]
-            text = out["content"][0]["text"]
-            self.assertIn("a-m", text)
-            err = rpc(4, "tools/call",
+                      {"name": "a_task",
+                       "arguments": {"status": "READY"}})["result"]
+            self.assertIn("a-m", out["content"][0]["text"])
+            ask = rpc(4, "tools/call",
+                      {"name": "a_ask", "arguments": {}})["result"]
+            self.assertIn("[]", ask["content"][0]["text"])
+            err = rpc(5, "tools/call",
                       {"name": "nope", "arguments": {}})["error"]
-            self.assertIn("unknown tool", err["message"])
+            self.assertIn("unknown verb", err["message"])
         finally:
             proc.kill()
 
