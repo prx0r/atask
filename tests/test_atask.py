@@ -491,5 +491,122 @@ class TestPolicy(unittest.TestCase):
         self.assertEqual(rep["verdict"], "PROHIBITED")
 
 
+class TestControlHarness(unittest.TestCase):
+    def test_chain_grammar(self):
+        from chain import describe, parse
+        acts = parse("29341")
+        self.assertEqual([(a["key"], a["name"], a["arg"]) for a in acts],
+                         [("2", "ZOOM", None), ("9", "FIX", None),
+                          ("3", "DIG", None), ("4", "PICK", 1)])
+        self.assertIn("ZOOM", describe(acts))
+        with self.assertRaises(ValueError):
+            parse("4")  # PICK needs a digit
+        with self.assertRaises(ValueError):
+            parse("2x9")
+
+    def test_press_log_shape(self):
+        from press import key_index, log, read
+        self.assertEqual(key_index("1"), 0)
+        self.assertEqual(key_index("0"), 9)
+        root = fresh_root(self)
+        driver_boot(root)
+        row = log(root, "s-build", "5", None, "5", {"open_h": []}, {"ok": True})
+        self.assertEqual(row["picked"], 4)
+        self.assertEqual(row["picked_text"], "OK")
+        self.assertEqual(len(row["shown"]), 10)
+        self.assertEqual(len(read(root)), 1)
+
+    def test_digits_answer_humans(self):
+        from instrument import run
+        from press import read as press_read
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-need")
+        h_escalate(root, "a-need", "pick one?", ["aa", "bb"], "aa")
+        rep = run("240", session="s1", root=root)  # ZOOM then PICK#0
+        self.assertTrue(all(r["ok"] for r in rep["results"]), rep)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-need"]["status"], "EXECUTING")
+        rows = press_read(root)
+        self.assertEqual([r["picked_text"] for r in rows], ["ZOOM", "PICK"])
+
+    def test_ok_no_tell(self):
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-t")
+        h_escalate(root, "a-t", "say something?")
+        rep = run("7", session="s1", root=root, payloads={"7": "hello human"})
+        self.assertTrue(rep["results"][0]["ok"])
+        add_task(root, "a-t2")
+        h_escalate(root, "a-t2", "approve?")
+        rep = run("5", session="s1", root=root)
+        self.assertIn("approved", rep["results"][0]["close"])
+        add_task(root, "a-t3")
+        h_escalate(root, "a-t3", "approve?")
+        rep = run("6", session="s1", root=root)
+        self.assertIn("denied", rep["results"][0]["close"])
+        by_h = {h["id"]: h for h in atask.hload(root)}
+        denied = [h for h in by_h.values() if h.get("status") == "denied"]
+        self.assertEqual(len(denied), 1)
+
+    def test_tell_refuses_secrets(self):
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-s")
+        h_escalate(root, "a-s", "give input")
+        rep = run("7", session="s1", root=root,
+                  payloads={"7": "my api_key: hunter2hunter2"})
+        self.assertFalse(rep["results"][0]["ok"])
+        self.assertIn("secret-refused", rep["results"][0]["action"])
+
+    def test_halt_blocks_executing_not_readonly(self):
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        rep = run("0", session="s1", root=root)
+        self.assertIn("halted", rep["results"][0]["close"])
+        rep = run("1", session="s1", root=root)
+        self.assertFalse(rep["results"][0]["ok"])  # executing refused
+        rep = run("2", session="s1", root=root)
+        self.assertTrue(rep["results"][0]["ok"])  # readonly survives
+        rep = run("0", session="s1", root=root)
+        self.assertIn("resumed", rep["results"][0]["close"])
+
+    def test_mcp_roundtrip(self):
+        import subprocess as _sp
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        atask.set_status("a-m", "JUSTIFIED", root)
+        proc = _sp.Popen(
+            [sys.executable, os.path.join(HERE, "mcp_server.py"),
+             "--dir", root],
+            stdin=_sp.PIPE, stdout=_sp.PIPE, text=True, cwd=HERE)
+        try:
+            def rpc(mid, method, params=None):
+                proc.stdin.write(json.dumps(
+                    {"jsonrpc": "2.0", "id": mid, "method": method,
+                     "params": params or {}}) + "\n")
+                proc.stdin.flush()
+                return json.loads(proc.stdout.readline())
+            self.assertEqual(rpc(1, "initialize")["result"]["serverInfo"]["name"], "atask")
+            tools = rpc(2, "tools/list")["result"]["tools"]
+            names = {t["name"] for t in tools}
+            self.assertTrue({"atask_zoom", "atask_ready", "atask_humans",
+                             "atask_presses"} <= names)
+            out = rpc(3, "tools/call",
+                      {"name": "atask_ready", "arguments": {}})["result"]
+            text = out["content"][0]["text"]
+            self.assertIn("a-m", text)
+            err = rpc(4, "tools/call",
+                      {"name": "nope", "arguments": {}})["error"]
+            self.assertIn("unknown tool", err["message"])
+        finally:
+            proc.kill()
+
+
 if __name__ == "__main__":
     unittest.main()

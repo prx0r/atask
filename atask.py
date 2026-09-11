@@ -339,9 +339,13 @@ def escalate(root: Path, tid: str, need: str, options: list[str] | None = None,
     return True, hid
 
 
-def answer(root: Path, hid: str, answer_text="") -> tuple[bool, str]:
-    """Human delivers. Resume the paused task; re-open DONE dependents that
-    consumed the prediction (reconcile: real data landed, re-verify)."""
+def answer(root: Path, hid: str, answer_text="",
+           status: str = "answered") -> tuple[bool, str]:
+    """Human delivers. Resume the paused task; re-open DONE/REPORTED
+    dependents that consumed the prediction (reconcile: real data landed,
+    re-verify). status is answered|denied (denial replans, moves nothing)."""
+    if status not in ("answered", "denied"):
+        return False, f"bad human-task status {status!r}"
     root = Path(root)
     hs = hload(root)
     by_h = {h.get("id"): h for h in hs}
@@ -350,7 +354,7 @@ def answer(root: Path, hid: str, answer_text="") -> tuple[bool, str]:
     h = by_h[hid]
     if h.get("status") != "open":
         return False, f"human task not open: {hid}"
-    h["status"] = "answered"
+    h["status"] = status
     h["answer"] = (answer_text or "")[:2000]
     hsave(hs, root)
     q = root / "tasks.jsonl"
@@ -370,8 +374,8 @@ def answer(root: Path, hid: str, answer_text="") -> tuple[bool, str]:
     save_all(recs, q)
     for t in affected:
         alog(t, "reverify", [], root,
-             f"real data landed on {hid}; re-verify before DONE")
-    return True, f"{hid} answered; resumed+reverify: {affected or ['none']}"
+             f"{status} on {hid}; re-verify before DONE")
+    return True, f"{hid} {status}; resumed+reverify: {affected or ['none']}"
 
 
 # ------------------------------------------------------------------

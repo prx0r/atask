@@ -37,13 +37,31 @@ spend → M, human/irreversible → H, else A). Repo config lives in
 | File | Role |
 |---|---|
 | `ATASK.md` | One-page contract: goal → tasks → alogs → validator → done |
-| `atask.py` | Queue core: goal/spawn/log/stoplight/escalate/answer/done-gate/verify |
+| `atask.py` | Queue core: goal/spawn/log/stoplight/escalate/answer/done-gate/budget/policy |
 | `driver.py` | Autonomous pulse: `boot` / `pulse` (one tick) / `run` (to halt-legal) |
+| `instrument.py` | 10-key control harness: `press <chain>` (digits), `presses` (the log) |
+| `keys.json` + `chain.py` | Key contract + digit grammar (only 4 takes a digit) |
+| `press.py` | Press rows in predictor shape: shown/picked/context/outcome |
+| `mcp_server.py` | Read-only A-language tools over stdio (agent reads, digits write) |
 | `acheck.py` | Self-audit: exit 0 = A-task native |
 | `runs.py` | Content-addressed receipts (`sha256:` ids, tamper-evident) |
 | `VALIDATORS.md` | The dummy-judge contract + minimal example |
 | `AGENTS.md` | Binding laws for agents working under this harness |
 | `tests/` | Self-tests (stdlib unittest, no deps) |
+
+## Control harness (the 0-9 endgame)
+
+Give the agent the MCP (`mcp_server.py`); it speaks A-language and surfaces
+needs only as h-tasks. You answer in digits (`instrument.py press <chain>`):
+1 GO · 2 ZOOM · 3 DIG · 4 PICK#n · 5 OK · 6 NO · 7 TELL · 8 GOAL · 9 FIX ·
+0 STOP. Every press logs a predictor-shaped row to `presses.jsonl` — the
+start-to-end sequence of a build, ready to model and automate later.
+
+```bash
+python3 instrument.py press 2 --dir .atask --session build1
+python3 instrument.py press 41 --dir .atask --session build1   # PICK#1
+python3 instrument.py presses --dir .atask
+```
 
 ## State (per adopting repo, default `.atask/`)
 
