@@ -1219,17 +1219,26 @@ def main(argv: list[str] | None = None) -> int:
             if not a.id:
                 print("run start needs --id (task id)")
                 return 1
-            q = root / "tasks.jsonl"
-            recs = load(q)
-            by_id = {r.get("id"): r for r in recs}
-            if a.id not in by_id:
-                print(f"unknown task: {a.id}")
+
+            def _go(recs: list[dict], hs: list[dict], ms: list[dict]):
+                by_id = {r.get("id"): r for r in recs}
+                if a.id not in by_id:
+                    return (False, "unknown task", 0)
+                rec = by_id[a.id]
+                if rec.get("status") in ("DONE", "REJECTED", "PAUSED"):
+                    return (False,
+                            f"refused: run start on {rec.get('status')} task "
+                            f"(DONE is terminal; REJECTED refiles; "
+                            f"PAUSED waits human)", 0)
+                rec["attempts"] = int(rec.get("attempts", 0)) + 1
+                rec["status"] = "EXECUTING"
+                return (True, "", int(rec["attempts"]))
+
+            ok, msg, attempt = transact(root, _go)
+            if not ok:
+                print(msg)
                 return 1
-            rec = by_id[a.id]
-            rec["attempts"] = int(rec.get("attempts", 0)) + 1
-            rec["status"] = "EXECUTING"
-            save_all(recs, q)
-            run = _runs.Run(task_id=a.id, attempt=rec["attempts"],
+            run = _runs.Run(task_id=a.id, attempt=attempt,
                             worker=a.worker, model=a.model, provider=a.provider)
             _runs.save_open(run, root)
             _emit(root, "run.started", task_id=a.id, run_id=run.run_id,

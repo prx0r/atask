@@ -1342,6 +1342,25 @@ class TestMinimalPass(unittest.TestCase):
         rep = driver_pulse(root)
         self.assertTrue(rep["halt_legal"])
 
+    def test_venue_gaps_become_htask_specs(self):
+        from meters.venue_auth import audit
+        rep = audit(env={})
+        self.assertTrue(len(rep["gaps"]) >= 4)
+        kinds = {g["kind"] for g in rep["gaps"]}
+        self.assertTrue(kinds <= {"SECRET", "AUTHORIZATION"})
+        self.assertTrue(all(g["operation"] for g in rep["gaps"]))
+        rep2 = audit(env={"GITHUB_TOKEN": "x"})
+        self.assertIn("github", rep2["ok"])
+        # an empty-env gap files cleanly as a real h-task after earning
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-v")
+        earn(root, "a-v")
+        gap = rep["gaps"][0]
+        ok, hid = h_escalate(root, "a-v", gap["need"], gap["kind"],
+                             operation=gap["operation"])
+        self.assertTrue(ok, hid)
+
     def test_wave_d_lane_adapter(self):
         import sqlite3
         import tempfile
@@ -1368,14 +1387,27 @@ class TestMinimalPass(unittest.TestCase):
         self.assertTrue(p["found"])
         self.assertFalse(poll("demo", "a-nope", base=base)["found"])
 
+    def test_run_start_refuses_terminal_states(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-t")
+        finish_task(root, "a-t")
+        driver_pulse(root)  # DONE
+        rc = atask.main(["run", "start", "--dir", root, "--id", "a-t"])
+        self.assertEqual(rc, 1)  # DONE is terminal, no resurrection
+        add_task(root, "a-r")
+        atask.main(["reject", "--dir", root, "--id", "a-r",
+                    "--reasons", "x"])
+        rc = atask.main(["run", "start", "--dir", root, "--id", "a-r"])
+        self.assertEqual(rc, 1)  # REJECTED refiles, never resumes
+
     def test_metered_close(self):
-        from runs import read_runs
+        from runs import list_open, read_runs
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-m")
         rc = atask.main(["run", "start", "--dir", root, "--id", "a-m"])
         self.assertEqual(rc, 0)
-        from runs import list_open
         rid = list_open(root, "a-m")[0]["run_id"]
         rc = atask.main(["run", "finish", "--dir", root, "--run", rid,
                          "--result", "completed", "--from-session",

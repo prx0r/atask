@@ -1,5 +1,17 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — f-24/25/26 + run-start guard (97/97)
+- f-24 venue_auth adapter (env gaps → h-task specs, secrets never read).
+- f-25 live contention: two processes raced one board claim, exactly
+  one winner; plus transactional queue (transact + re-entrant flock,
+  readers covered) after a REAL torn read bit first.
+- f-26 grant edge live (g-17c, approve-once recorded); stub-evidence
+  filing rejected per no-theater rule.
+- New: `run start` refuses DONE/REJECTED/PAUSED (resurrection hole
+  found live) and runs transactionally. Test-only insertions breaking
+  suite structure repaired twice — edits inside test bodies need the
+  same care as kernel edits.
+
 ## 2026-09-11 — wave D (session goal DONE, 95/95)
 - `meters/hermes_board.py`: push (idempotent by atask id), poll
   (completion+result), claim (second worker refused when taken).
