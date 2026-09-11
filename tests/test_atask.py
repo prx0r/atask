@@ -712,7 +712,72 @@ class TestEventSubstrate(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
-        self.assertEqual(bad, [])
+class TestAdversarial(unittest.TestCase):
+    def test_tampered_receipt_refused_at_done_gate(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-t")
+        for st in ("JUSTIFIED", "EXECUTING"):
+            atask.set_status("a-t", st, root)
+        atask.alog("a-t", "work", [0], root, "x", "command:echo ok")
+        rr = write_report(root, "a-t")
+        vr = write_receipt(root, "a-t")
+        # Tamper the receipt file in place (id no longer matches content).
+        import json as _json
+        rp = os.path.join(root, "runs", vr.replace(":", "_") + ".json")
+        body = _json.loads(open(rp).read())
+        body["content"]["payload"] = "forged"
+        open(rp, "w").write(_json.dumps(body))
+        ok, msg = atask.set_status("a-t", "REPORTED", root,
+                                   report_ref=rr, validation_ref=vr)
+        self.assertTrue(ok, msg)  # REPORTED carries no proof requirement
+        ok, msg = atask.set_status("a-t", "DONE", root,
+                                   report_ref=rr, validation_ref=vr)
+        self.assertFalse(ok)
+        self.assertIn("TAMPERED", msg)
+
+    def test_verify_all_flags_tampered_ledger(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        vr = write_receipt(root, "a-x")
+        import json as _json
+        rp = os.path.join(root, "runs", vr.replace(":", "_") + ".json")
+        body = _json.loads(open(rp).read())
+        body["content"]["payload"] = "forged"
+        open(rp, "w").write(_json.dumps(body))
+        rep = runs.verify_all(os.path.join(root, "runs"))
+        self.assertEqual(rep["valid"], 0)
+        self.assertEqual(len(rep["invalid"]), 1)
+
+    def test_concurrent_pulses_stay_valid(self):
+        import subprocess as _sp
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-c")
+        finish_task(root, "a-c")
+        procs = [_sp.Popen([sys.executable, os.path.join(HERE, "driver.py"),
+                            "pulse", "--dir", root],
+                           stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, cwd=HERE)
+                 for _ in range(2)]
+        outs = [p.communicate() for p in procs]
+        self.assertTrue(all(json.loads(o[0])["promoted"] == ["a-c"] or
+                            json.loads(o[0])["promoted"] == [] for o in outs),
+                        outs)
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        done = [r for r in recs if r["id"] == "a-c" and r["status"] == "DONE"]
+        self.assertEqual(len(done), 1)  # exactly one DONE record, never dup
+        self.assertEqual(acheck_check(root), [])
+
+    def test_repulse_is_idempotent(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-i")
+        finish_task(root, "a-i")
+        first = driver_pulse(root)
+        self.assertEqual(first["promoted"], ["a-i"])
+        second = driver_pulse(root)
+        self.assertEqual(second["promoted"], [])
+        self.assertTrue(second["halt_legal"])
 
 
 LEGAL_EDGES = {

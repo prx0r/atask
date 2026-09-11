@@ -180,6 +180,15 @@ def done_gate(rec: dict, root: Path) -> list[str]:
         errs.append("DONE requires validation_ref (no receipt, no DONE)")
     elif not vr.startswith("sha256:") or resolve(vr, root) is None:
         errs.append(f"validation_ref unresolvable: {vr}"[:120])
+    else:
+        # Existence is not integrity: recompute the id from content.
+        try:
+            import runs as _runs
+            rp = resolve(vr, root)
+            if not _runs.verify_file(rp):
+                errs.append(f"validation_ref TAMPERED (id mismatch): {vr}"[:120])
+        except Exception as e:
+            errs.append(f"validation_ref unreadable: {e}"[:120])
     return errs
 
 
