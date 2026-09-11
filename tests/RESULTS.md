@@ -1,5 +1,21 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — money run (session `money1`, GOAL_DONE): MetaCraft microsaas
+- Prompt "make me a microsaas to make money" worked as a 4-task goal:
+  pick → build → price → track, all DONE via pulses, acheck 0.
+- Product: `/tmp/opencode/microsaas/` — `metacraft.py` (stdlib URL→
+  SEO/OG auditor, 5/5 tests green, live-fired on example.com: honest
+  20/100) + `PRICING.md` (free CLI / $9 one-time / $19-mo API + 3 paid
+  proofs defined, none claimed).
+- Speed/tokens per A-RUN (mono durations, honest nulls):
+  pick 0.4s · build 33.4s · price 0.4s · track 8.7s ≈ 43s total wall.
+  Tokens: null/unknown on every run — this worker has no usage
+  telemetry; nulls recorded, nothing estimated. Closing the gap needs
+  the provider-reporting worker wrapper (docs/AGENT.md contract).
+- `verify` shows 5 stale-history findings (3 pre-rule grandfathers +
+  2 covers_goal aimed at the retired 4-acceptance goal): single-goal
+  rotation orphans old mappings by design; left as history.
+
 ## 2026-09-11 — proof run (session `proof1`, GOAL_DONE, docs + MCP)
 - Dogfood goal (4 acceptance) worked to DONE via CLI + digits + pulses.
   Suite **68/68**, receipt `sha256:0c6de9…03835b`. Pushed `a357412` first
