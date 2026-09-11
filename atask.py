@@ -386,6 +386,26 @@ def spawn(root: Path, parent: str, tid: str, summary: str,
 # ONLY ask at a genuine human boundary (enforced in code, not advice):
 ASK_KINDS = ("AUTHORIZATION", "SECRET", "PREFERENCE",
              "PHYSICAL", "IDENTITY", "AMBIGUITY")
+# Kinds where no attempt is possible (nothing to try): exempt from proof.
+ATTEMPT_EXEMPT = ("PHYSICAL", "IDENTITY")
+# No WASM, no sidecar: proof-of-attempt is a stdlib .py rule over records
+# the kernel already keeps (attempts, a-logs, validator events). The
+# evidence commands in question already execute; sandboxing adds nothing.
+
+
+def _failed_signal(root: Path, tid: str) -> bool:
+    """True iff the task has a FAILED checkable attempt on record:
+    a validator.failed event, or an a-log evidence command that runs red
+    right now. Status-flapping without evidence never counts."""
+    root = Path(root)
+    from events import read as _eread
+    if any(e.get("task_id") == tid for e in _eread(root, "validator.failed")):
+        return True
+    for e in alog_read(tid, root):
+        ev = e.get("evidence", "") or ""
+        if ev.startswith("command:") and check_evidence(ev, root.parent):
+            return True
+    return False
 
 
 def hload(root: Path) -> list[dict]:
@@ -422,6 +442,19 @@ def escalate(root: Path, tid: str, need: str, kind: str,
         return False, f"unknown task: {tid}"
     if by_id[tid].get("status") == "DONE":
         return False, f"task already DONE: {tid}"
+    if kind not in ATTEMPT_EXEMPT:
+        # Proof-of-attempt: an agent that hasn't tried can't escalate.
+        # Attempts alone don't suffice (status-flapping farms nothing);
+        # a FAILED checkable attempt must be on record.
+        attempts = int(by_id[tid].get("attempts", 0))
+        if attempts < 2:
+            return False, (f"refused: {tid} has {attempts} recorded attempt(s); "
+                           f"work it (EXECUTING + a-log) at least twice first")
+        if not alog_read(tid, root):
+            return False, f"refused: no a-log lines on {tid} (log every action)"
+        if not _failed_signal(root, tid):
+            return False, (f"refused: no failed checkable attempt on {tid}; "
+                           f"try something with re-runnable evidence first")
     hid = "h-" + _uuid.uuid4().hex[:6]
     hs = hload(root)
     hs.append({"id": hid, "task": tid, "kind": kind, "need": need,

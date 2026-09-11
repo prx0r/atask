@@ -26,10 +26,13 @@ not depend on the answer.
    transition (direct `done` included) + report + untampered receipt.
 5. **A-ask.** Blocked on a human? Only at a genuine boundary —
    AUTHORIZATION, SECRET, PREFERENCE, PHYSICAL, IDENTITY, AMBIGUITY
-   (enforced in code; anything else is refused). File kind + need +
-   options + recommendation, park the lane, keep working the rest.
-   Predictions allowed; answers reconcile dependents back to EXECUTING
-   with a reverify line. Nothing passes on stale data silently.
+   (enforced in code; anything else is refused). And only after PROOF
+   OF ATTEMPT: ≥2 recorded attempts + a-log lines + a FAILED checkable
+   try (red evidence or failed validator) — PHYSICAL/IDENTITY exempt,
+   nothing to try there. Status-flapping without evidence farms nothing.
+   File kind + need + options + recommendation, park the lane, keep
+   working the rest. Predictions allowed; answers reconcile dependents
+   back to EXECUTING with a reverify line.
 
 ## The keypad (the human answers in digits)
 

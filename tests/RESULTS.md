@@ -1,5 +1,21 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — proof-of-attempt gate (session `proofgate`, GOAL_DONE, 77/77)
+- `escalate` now refuses untried tasks: ≥2 attempts + a-log lines + a
+  FAILED checkable try (red evidence now, or validator.failed event).
+  PHYSICAL/IDENTITY exempt (nothing to attempt). No WASM: stdlib rule
+  over records the kernel keeps; evidence already executes. 6 new
+  `TestPromotionProof` (untried/clean-attempts/red/validator-event/
+  exempt/flap-farming).
+- Migration cost was real: 12 old call sites had to earn their
+  escalations. The audit caught two more of mine: helper demoting
+  lanes, and the poisoned-probe pattern (failed evidence that can
+  never turn green blocks promotion forever) → marker-probe pattern
+  documented in `earn()`: probe red until the fix file lands.
+- Design note for Seed0: flapping (status churn, no evidence) is now
+  measurable as distinct from trying — log attempts with/without
+  evidence as separate features.
+
 ## 2026-09-11 — peer review: process vs ideas (not going well, honestly)
 Verdict: the kernel works; the process around it leaks. Ranked gaps:
 
