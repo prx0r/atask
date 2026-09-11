@@ -1,5 +1,15 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — wave B+C marathon (20/50 todos, 93/93)
+- 9 micro-tools ship tested (digest/changelog/uptime/rss/invoice/
+  habit/bookmarks/meetings/pricewatch, 15/15 product tests).
+- Miner wave: frequencies.py (real table, thin data admitted),
+  ERAS/DEDUPE/PREDICTOR/POLICY_AUTO docs, backtest correctly silent
+  (N too small). Predictor spec refuses to activate pre-volume.
+- Batch-script garbage evidence → 6 tasks REJECTED + refiled (second
+  instance of the refile pattern; first was a-mcp). Rule restated:
+  evidence strings are generated from the task record, never pasted.
+
 ## 2026-09-11 — v0.1.1 batch (session `v011`, GOAL_DONE, 92/92)
 - Receipt churn fixed: `runs.save` skips writes when stable content
   matches (mtime clean on reruns). Proved by new rerun test.

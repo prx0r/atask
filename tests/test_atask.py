@@ -1342,6 +1342,23 @@ class TestMinimalPass(unittest.TestCase):
         rep = driver_pulse(root)
         self.assertTrue(rep["halt_legal"])
 
+    def test_miner_frequencies(self):
+        from meters.frequencies import table
+        from press import log as press_log
+        root = fresh_root(self)
+        driver_boot(root)
+        press_log(root, "s", "0", None, "0",
+                  {"mode": "question",
+                   "question": {"kind": "PREFERENCE"},
+                   "context": {}}, {"ok": True, "action": "accept"})
+        press_log(root, "s", "5", None, "5",
+                  {"mode": "question",
+                   "question": {"kind": "AUTHORIZATION"},
+                   "context": {}}, {"ok": True, "action": "approve"})
+        t = table(root)
+        self.assertEqual(t["by_kind"]["PREFERENCE"]["accept"], 1)
+        self.assertEqual(t["by_kind"]["AUTHORIZATION"]["approve"], 1)
+
     def test_no_done_button(self):
         # The agent cannot declare DONE: no CLI path exists. Only the
         # machine promotes (pulse: REPORTED + green stoplight).
