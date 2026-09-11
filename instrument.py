@@ -27,6 +27,7 @@ import chain as _chain
 import press as _press
 from atask import answer, goal_check, load, open_h, ready, stoplight
 from driver import spent_totals, zoom as _zoom
+from events import emit as _emit
 
 HALT = "HALT.json"
 CORR = "corrections.jsonl"
@@ -238,6 +239,8 @@ def run(chain_str: str, session: str | None = None, root: str | Path = ".atask",
         _press.log(root, session, a["key"], a["arg"], chain_str, ctx,
                    {"ok": res["ok"], "action": res["action"],
                     "choice": a["arg"] if a["arg"] is not None else a["key"]})
+        # human.choice events come from atask.answer (single source);
+        # the press row above carries digit + question + choice.
         results.append(res)
     return {"session": session, "chain": chain_str,
             "described": _chain.describe(actions),
@@ -269,6 +272,10 @@ def digest(root: str | Path, session: str) -> dict:
                            [r["ts"] for r in rows])) / 60, 2) if rows else 0.0}}
     with open(root / "presses.jsonl", "a") as f:
         f.write(json.dumps(out, sort_keys=True) + "\n")
+    _emit(root, "session.outcome", session=session,
+          goal_done=out["outcome"]["goal_done"],
+          spent_usd=out["outcome"]["spent_usd"],
+          presses=out["outcome"]["presses"])
     return out
 
 

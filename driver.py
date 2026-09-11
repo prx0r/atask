@@ -25,16 +25,47 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from atask import goal_check, load, open_h, ready, set_status, stoplight
+from atask import goal_check, goal_get, load, open_h, ready, set_status, stoplight
+from events import emit as _emit, read as _eread
 
 
 def spent_totals(root: Path) -> dict:
     """Recorded spend context (tiny fields, no caps, no refusal)."""
-    usd, toks = 0.0, 0
+    usd, toks, tools, attempts = 0.0, 0, 0, 0
     for r in load(Path(root) / "tasks.jsonl"):
         usd = round(usd + float(r.get("spent_usd", 0.0) or 0.0), 6)
         toks += int(r.get("spent_tokens", 0) or 0)
-    return {"spent_usd": usd, "spent_tokens": toks}
+        tools += int(r.get("tool_calls", 0) or 0)
+        attempts += int(r.get("attempts", 0) or 0)
+    return {"spent_usd": usd, "spent_tokens": toks, "tool_calls": tools,
+            "attempts": attempts}
+
+
+def resources(root: Path, last_failures: list | None = None) -> dict:
+    """BATS-style block: used vs caps (context for the agent, never refusal).
+    Caps live on the goal as declared context; missing cap = unmetered."""
+    root = Path(root)
+    spent = spent_totals(root)
+    goal = goal_get(root) or {}
+    block: dict = {"spent_usd": spent["spent_usd"],
+                   "spent_tokens": spent["spent_tokens"],
+                   "tool_calls": spent["tool_calls"],
+                   "attempts": spent["attempts"],
+                   "last_validator": last_failures or "ok"}
+    for used_k, cap_k in (("spent_usd", "budget_usd"),
+                          ("spent_tokens", "token_budget"),
+                          ("tool_calls", "tool_budget")):
+        cap = goal.get(cap_k)
+        if isinstance(cap, (int, float)) and cap > 0:
+            block[cap_k] = cap
+            block[used_k.replace("spent_", "remaining_").replace("tool_calls", "remaining_tools")] = \
+                round(cap - spent[used_k], 6)
+    ddl = goal.get("deadline_min")
+    if isinstance(ddl, (int, float)) and ddl > 0:
+        age_min = round((time.time() - goal.get("ts", time.time())) / 60, 2)
+        block["elapsed_min"] = age_min
+        block["remaining_min"] = round(ddl - age_min, 2)
+    return block
 
 
 def zoom(root: Path) -> dict:
@@ -43,10 +74,22 @@ def zoom(root: Path) -> dict:
     done = [r for r in recs if r.get("status") == "DONE"]
     missing = [r for r in recs if r.get("status") not in ("DONE", "REJECTED")]
     gc = goal_check(root)
+    last_fail = "ok"
+    try:
+        pl = root / "pulse.jsonl"
+        if pl.exists():
+            lines = pl.read_text().splitlines()
+            if lines:
+                ng = json.loads(lines[-1]).get("nogo", [])
+                if ng:
+                    last_fail = [f"{t}" for t in ng][:3]
+    except Exception:
+        pass
     return {"done": len(done), "missing": len(missing),
             "ready": len(ready(recs)),
             "open_h": len(open_h(root)),
-            "goal_done": gc.get("goal_done", False) if gc.get("goal") else None}
+            "goal_done": gc.get("goal_done", False) if gc.get("goal") else None,
+            "resources": resources(root, last_fail)}
 
 
 def pulse(root: Path) -> dict:
@@ -70,10 +113,13 @@ def pulse(root: Path) -> dict:
             ok, _ = set_status(r["id"], "DONE", root)
             if ok:
                 promoted.append(r["id"])
+                _emit(root, "validator.passed", task_id=r["id"])
             else:
                 nogos[r["id"]] = ["DONE gate refused"]
         else:
             nogos[r["id"]] = sl["missing"][:4]
+            _emit(root, "validator.failed", task_id=r["id"],
+                  reasons=sl["missing"][:4])
     orders = [{"id": r.get("id"), "summary": (r.get("summary") or "")[:100],
                "acceptance": (r.get("acceptance") or [])[:3]}
               for r in ready(load(q))]
@@ -82,10 +128,18 @@ def pulse(root: Path) -> dict:
     halt_legal = not orders and not nogos and not still_reported
     gc = goal_check(root)
     oh = open_h(root)
+    if gc.get("goal_done") and not _eread(root, "goal.done"):
+        spent = spent_totals(root)
+        _emit(root, "goal.done",
+              acceptance=len(gc.get("items", [])),
+              spent_usd=spent["spent_usd"], attempts=spent["attempts"])
+    fails = [f"{tid}: {msgs[0]}"[:120] for tid, msgs in nogos.items()][:3]
+    res = resources(root, fails or "ok")
     line = {"ts": time.time(), "promoted": promoted, "nogo": list(nogos),
             "ready": [o["id"] for o in orders], "halt_legal": halt_legal,
             "open_h": [h["id"] for h in oh],
-            "goal_done": gc.get("goal_done") if gc.get("goal") else None}
+            "goal_done": gc.get("goal_done") if gc.get("goal") else None,
+            "spent_usd": res["spent_usd"]}
     try:
         with open(root / "pulse.jsonl", "a") as f:
             f.write(json.dumps(line, sort_keys=True) + "\n")
@@ -94,7 +148,9 @@ def pulse(root: Path) -> dict:
     return {"promoted": promoted, "nogo": nogos, "orders": orders,
             "halt_legal": halt_legal,
             "open_h": [h["id"] for h in oh],
-            "spent": spent_totals(root),
+            "spent": {"spent_usd": res["spent_usd"],
+                      "spent_tokens": res["spent_tokens"]},
+            "resources": res,
             "goal": ({k: gc[k] for k in ("goal_done", "items") if k in gc}
                      if gc.get("goal") else {"goal": False}),
             "elapsed_s": round(time.monotonic() - t0, 3),

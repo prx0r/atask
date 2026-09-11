@@ -39,13 +39,14 @@ question) ride in every press row with question + context + choice;
 |---|---|
 | `ATASK.md` | The contract (paste into any agent's instructions) |
 | `atask.py` | Queue: goal/spawn/log/stoplight/ask-gate/escalate/answer/done-gate/verify |
-| `driver.py` | `boot` / `pulse` / `run` — mechanical promotion + orders + spend totals |
+| `driver.py` | `boot` / `pulse` / `run` — mechanical promotion + BATS resource block |
+| `events.py` | Canonical `events.jsonl` (wall + monotonic clocks) — the only analytics format |
 | `instrument.py` | `press` / `presses` / `digest` — digits in, dataset out |
 | `keys.json` + `chain.py` | Key contract + digit grammar |
 | `press.py` | Predictor-shaped rows (shown/picked/question/context/choice) |
 | `mcp_server.py` | Seven verbs over stdio |
 | `acheck.py` | Exit 0 = native |
-| `runs.py` | Content-addressed receipts |
+| `runs.py` | Content-addressed receipts + `Run` dataclass (mono timing, counters) |
 | `VALIDATORS.md` | Dummy-judge contract |
 | `staging/` | Pruned subsystems (budgets, lanes, triage) — Seed0-side, recoverable |
 
@@ -53,7 +54,23 @@ question) ride in every press row with question + context + choice;
 
 `goal.json` · `tasks.jsonl` · `h-tasks.jsonl` · `a-logs/` · `reports/`
 (validators check 5 sections) · `validators/` · `runs/` · `presses.jsonl`
-· `corrections.jsonl` · `pulse.jsonl` · `HALT.json`.
+· `events.jsonl` · `corrections.jsonl` · `pulse.jsonl` · `HALT.json`.
+
+## Layers (what lives where)
+
+```text
+L0 KERNEL (this repo, stdlib only)
+  goal/task/proof/human boundary, Run counters, event emission.
+  NO intelligence. `grep pydantic|opentelemetry kernel/` = nothing (CI-tested).
+
+L1 OBSERVABILITY (outside)
+  events.jsonl → OTel adapter → Phoenix; SQLite/DuckDB over the stream.
+  NO control.
+
+L2 POLICY (outside: Seed0)
+  BATS resource-awareness → forecasts → contextual bandits → routing.
+  LEARNS control. The kernel never refuses on budget; it reports remaining.
+```
 
 ## Boundary rule (what belongs here)
 

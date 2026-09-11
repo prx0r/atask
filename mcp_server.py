@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atask import goal_check, load, open_h, ready, stoplight, verify
 from driver import spent_totals, zoom
+from events import read as events_read
 from press import read as presses_read
 
 ROOT = Path(".atask")
@@ -70,6 +71,7 @@ def _call(name: str, args: dict):
         z = zoom(ROOT)
         z["spent"] = spent_totals(ROOT)
         z["findings"] = len(verify(ROOT))
+        z["recent_events"] = events_read(ROOT, limit=5)
         return z
     if name == "a_task":
         recs = load(ROOT / "tasks.jsonl")

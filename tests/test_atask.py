@@ -578,5 +578,139 @@ class TestControlHarness(unittest.TestCase):
             proc.kill()
 
 
+class TestEventSubstrate(unittest.TestCase):
+    def test_transitions_emit_events_with_mono_clock(self):
+        from events import read as eread
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-e")
+        atask.set_status("a-e", "EXECUTING", root)
+        rows = eread(root)
+        kinds = [r["event"] for r in rows]
+        self.assertIn("run.started", kinds)
+        self.assertIn("task.status", kinds)
+        self.assertTrue(all("mono_ns" in r and "ts" in r for r in rows))
+        monos = [r["mono_ns"] for r in rows]
+        self.assertEqual(monos, sorted(monos))
+
+    def test_attempts_count_and_run_finished_on_done(self):
+        from events import read as eread
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-e2")
+        atask.set_status("a-e2", "EXECUTING", root)
+        atask.set_status("a-e2", "EXECUTING", root)  # same state: no new attempt
+        finish_task(root, "a-e2")  # re-enters EXECUTING from JUSTIFIED: attempt 2
+        driver_pulse(root)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-e2"]["attempts"], 2)
+        kinds = [r["event"] for r in eread(root)]
+        self.assertIn("run.finished", kinds)
+
+    def test_human_ask_and_choice_events(self):
+        from events import read as eread
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-h")
+        h_escalate(root, "a-h", "pick?", "PREFERENCE", ["aa", "bb"], "aa")
+        h_answer(root, [h["id"] for h in open_h(root)][0], "aa")
+        by_kind = {}
+        for r in eread(root):
+            by_kind.setdefault(r["event"], []).append(r)
+        self.assertEqual(by_kind["human.asked"][0]["kind"], "PREFERENCE")
+        self.assertEqual(by_kind["human.choice"][0]["selected"], "aa")
+
+    def test_resource_used_event(self):
+        from events import read as eread
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-c")
+        atask.set_status("a-c", "EXECUTING", root)
+        atask.alog("a-c", "work", [0], root, "x", "")
+        q = os.path.join(root, "tasks.jsonl")
+        recs = atask.load(q)
+        recs[0]["spent_usd"] = 0.03
+        atask.save_all(recs, q)
+        # CLI path emits resource.used
+        import subprocess as _sp
+        r = _sp.run([sys.executable, os.path.join(HERE, "atask.py"),
+                     "log", "--dir", root, "--id", "a-c",
+                     "--covers", "0", "--cost", "0.01", "--tokens", "50"],
+                    capture_output=True, text=True, cwd=HERE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = eread(root, "resource.used")
+        self.assertEqual(len(res), 1)
+        self.assertAlmostEqual(res[0]["cost_usd"], 0.01)
+
+    def test_run_dataclass_mono_timing(self):
+        from runs import Run
+        r = Run(task_id="a-x")
+        r.note(cost_usd=0.02, tokens=100, tools=3)
+        snap = r.finish("validated")
+        self.assertEqual(snap["outcome"], "validated")
+        self.assertAlmostEqual(snap["spent_usd"], 0.02)
+        self.assertGreaterEqual(snap["elapsed_ms"], 0)
+
+    def test_bats_block_with_remaining(self):
+        from driver import resources
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "g", ["x"], budget_usd=1.0, token_budget=1000,
+                 deadline_min=30)
+        add_task(root, "a-c")
+        atask.set_status("a-c", "EXECUTING", root)
+        atask.alog("a-c", "work", [0], root, "x", "")
+        q = os.path.join(root, "tasks.jsonl")
+        recs = atask.load(q)
+        recs[0]["spent_usd"] = 0.25
+        recs[0]["spent_tokens"] = 100
+        atask.save_all(recs, q)
+        res = resources(root)
+        self.assertAlmostEqual(res["remaining_usd"], 0.75)
+        self.assertEqual(res["remaining_tokens"], 900)
+        self.assertIn("remaining_min", res)
+        self.assertEqual(res["attempts"], 1)
+
+    def test_goal_done_emitted_once(self):
+        from events import read as eread
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "g", ["x"])
+        add_task(root, "a-r")
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        recs[0]["covers_goal"] = [0]
+        atask.save_all(recs, os.path.join(root, "tasks.jsonl"))
+        finish_task(root, "a-r")
+        driver_pulse(root)
+        driver_pulse(root)
+        self.assertEqual(len(eread(root, "goal.done")), 1)
+
+    def test_digit_choice_emits_human_choice(self):
+        from events import read as eread
+        from instrument import run
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-need")
+        h_escalate(root, "a-need", "pick?", "PREFERENCE", ["aa", "bb"], "aa")
+        run("0", session="s1", root=root)
+        rows = eread(root, "human.choice")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "PREFERENCE")
+        self.assertIn("aa", rows[0]["selected"])
+
+    def test_kernel_has_no_heavy_deps(self):
+        import re as _re
+        banned = _re.compile(r"^\s*(import|from)\s+(pydantic|opentelemetry|otel|phoenix|logfire|duckdb)\b", _re.M)
+        bad = []
+        for fn in os.listdir(HERE):
+            if not fn.endswith(".py") or fn.startswith("test"):
+                continue
+            src = open(os.path.join(HERE, fn)).read()
+            if banned.search(src):
+                bad.append(fn)
+        self.assertEqual(bad, [])
+
+
 if __name__ == "__main__":
     unittest.main()

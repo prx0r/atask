@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 VOLATILE = {"ts", "timestamp", "started_at", "finished_at", "elapsed_s",
@@ -61,6 +62,48 @@ def verify_all(root: str | Path = "runs") -> dict:
         except Exception as e:
             bad.append(f"{f.name} ({e})"[:100])
     return {"files": len(files), "valid": ok, "invalid": bad}
+
+
+@dataclass
+class Run:
+    """One execution attempt at a task. Measurement is environment state:
+    wall clock says WHEN, monotonic clock says HOW LONG (NTP-immune).
+    Counters feed the BATS-style resource block; caps live on the goal
+    as context, never as kernel refusal."""
+    task_id: str
+    run_id: str = ""
+    attempt: int = 1
+    started_at: float = field(default_factory=time.time)
+    started_mono_ns: int = field(default_factory=time.monotonic_ns)
+    spent_usd: float = 0.0
+    tokens_used: int = 0
+    tool_calls: int = 0
+    finished: bool = False
+    outcome: str = ""
+
+    def __post_init__(self):
+        if not self.run_id:
+            import uuid as _uuid
+            self.run_id = "r-" + _uuid.uuid4().hex[:8]
+
+    def note(self, cost_usd: float = 0.0, tokens: int = 0, tools: int = 0):
+        self.spent_usd = round(self.spent_usd + cost_usd, 6)
+        self.tokens_used += int(tokens)
+        self.tool_calls += int(tools)
+        return self.snapshot()
+
+    def elapsed_ms(self) -> int:
+        return (time.monotonic_ns() - self.started_mono_ns) // 1_000_000
+
+    def finish(self, outcome: str) -> dict:
+        self.finished = True
+        self.outcome = outcome
+        return self.snapshot()
+
+    def snapshot(self) -> dict:
+        d = asdict(self)
+        d["elapsed_ms"] = self.elapsed_ms()
+        return d
 
 
 if __name__ == "__main__":

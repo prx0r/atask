@@ -44,6 +44,8 @@ import sys
 import time
 from pathlib import Path
 
+from events import emit as _emit
+
 STATUS = ("PROPOSED", "JUSTIFIED", "EXECUTING", "PAUSED", "REPORTED",
           "REJECTED", "DONE")
 READY_STATUS = ("JUSTIFIED", "EXECUTING")
@@ -199,8 +201,17 @@ def set_status(tid: str, status: str, root: Path, **fields) -> tuple[bool, str]:
         errs = done_gate(rec, root)
         if errs:
             return False, "transition rejected: " + "; ".join(errs)
+    prev = rec.get("status", "")
+    if status == "EXECUTING" and prev != "EXECUTING":
+        rec["attempts"] = int(rec.get("attempts", 0)) + 1
+        _emit(root, "run.started", task_id=tid, attempt=rec["attempts"])
     rec["status"] = status
     save_all(recs, q)
+    _emit(root, "task.status", task_id=tid, from_status=prev, to=status,
+          attempts=int(rec.get("attempts", 0)))
+    if status == "DONE":
+        _emit(root, "run.finished", task_id=tid, outcome="validated",
+              attempts=int(rec.get("attempts", 0)))
     return True, f"{tid} -> {status}"
 
 
@@ -210,10 +221,21 @@ def set_status(tid: str, status: str, root: Path, **fields) -> tuple[bool, str]:
 # so it cannot drift from the queue.
 
 
-def goal_set(root: Path, statement: str, acceptance: list[str]) -> dict:
+def goal_set(root: Path, statement: str, acceptance: list[str],
+             budget_usd: float | None = None, token_budget: int | None = None,
+             tool_budget: int | None = None,
+             deadline_min: float | None = None) -> dict:
     root = Path(root)
     g = {"id": "g-main", "statement": statement,
          "acceptance": list(acceptance), "ts": time.time()}
+    if budget_usd is not None:
+        g["budget_usd"] = budget_usd
+    if token_budget is not None:
+        g["token_budget"] = token_budget
+    if tool_budget is not None:
+        g["tool_budget"] = tool_budget
+    if deadline_min is not None:
+        g["deadline_min"] = deadline_min
     (root / "goal.json").write_text(json.dumps(g, indent=1, sort_keys=True))
     return g
 
@@ -344,6 +366,8 @@ def escalate(root: Path, tid: str, need: str, kind: str,
     by_id[tid]["status"] = "PAUSED"
     by_id[tid]["paused_on"] = hid
     save_all(recs, q)
+    _emit(root, "human.asked", hid=hid, task_id=tid, kind=kind,
+          options=list(options or []), recommended=recommendation[:200])
     return True, hid
 
 
@@ -365,6 +389,9 @@ def answer(root: Path, hid: str, answer_text="",
     h["status"] = status
     h["answer"] = (answer_text or "")[:2000]
     hsave(hs, root)
+    _emit(root, "human.choice", hid=hid, task_id=h.get("task", ""),
+          kind=h.get("kind", ""), recommended=(h.get("recommendation") or "")[:200],
+          selected=(answer_text or "")[:200], decision=status)
     q = root / "tasks.jsonl"
     recs = load(q)
     by_id = {r.get("id"): r for r in recs}
@@ -519,6 +546,10 @@ def main(argv: list[str] | None = None) -> int:
     p_goal.add_argument("op", choices=("set", "show", "check"))
     p_goal.add_argument("--statement", default="")
     p_goal.add_argument("--accept", action="append", default=[])
+    p_goal.add_argument("--budget-usd", default=None)
+    p_goal.add_argument("--token-budget", default=None)
+    p_goal.add_argument("--tool-budget", default=None)
+    p_goal.add_argument("--deadline-min", default=None)
     p_spawn = _dir(sub.add_parser("spawn"))
     p_spawn.add_argument("--parent", required=True)
     p_spawn.add_argument("--id", required=True)
@@ -605,6 +636,9 @@ def main(argv: list[str] | None = None) -> int:
                                     "spent_tokens": r["spent_tokens"]}
                     break
             save_all(recs, q)
+            if cost or toks:
+                _emit(root, "resource.used", task_id=a.id,
+                      cost_usd=cost, tokens=toks)
         print(json.dumps(out))
         return 0
 
@@ -646,7 +680,15 @@ def main(argv: list[str] | None = None) -> int:
             if not a.statement or not a.accept:
                 print("goal set needs --statement and at least one --accept")
                 return 1
-            g = goal_set(root, a.statement, a.accept)
+            try:
+                busd = float(a.budget_usd) if a.budget_usd is not None else None
+                tb = int(float(a.token_budget)) if a.token_budget is not None else None
+                tlb = int(float(a.tool_budget)) if a.tool_budget is not None else None
+                ddl = float(a.deadline_min) if a.deadline_min is not None else None
+            except ValueError:
+                print("unparseable cap (must be numbers)")
+                return 1
+            g = goal_set(root, a.statement, a.accept, busd, tb, tlb, ddl)
             print(json.dumps({"goal": g["id"], "acceptance": len(g["acceptance"])}))
             return 0
         if a.op == "show":
