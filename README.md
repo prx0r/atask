@@ -10,11 +10,12 @@ only guarantees the presses are worth learning from.
 python3 atask.py init --dir .atask
 python3 atask.py goal set --dir .atask --statement "ship demo" --accept "demo runs"
 python3 atask.py add --dir .atask --id a-run --summary "make it run" --accept "runs" --covers-goal 0
-# ... work, log, report, receipt ...
-python3 driver.py pulse --dir .atask
-python3 instrument.py press 0 --dir .atask --session build1   # accept
-python3 instrument.py digest --dir .atask --session build1    # outcome row
-python3 -m unittest discover tests                            # 36 green
+python3 atask.py run start --dir .atask --id a-run --worker opencode --model mimo-v2.5
+# ... work happens, worker reports its receipt ...
+python3 atask.py run usage --dir .atask --run r-xxxx --input-tokens 48321 --output-tokens 7132 --cost 0.0831
+python3 atask.py run finish --dir .atask --run r-xxxx --result validated --validator pytest
+python3 driver.py pulse --dir .atask   # orders carry attempts/tokens/cost/last-validator
+python3 -m unittest discover tests
 ```
 
 ## The seven verbs (MCP)
@@ -46,7 +47,7 @@ question) ride in every press row with question + context + choice;
 | `press.py` | Predictor-shaped rows (shown/picked/question/context/choice) |
 | `mcp_server.py` | Seven verbs over stdio |
 | `acheck.py` | Exit 0 = native |
-| `runs.py` | Content-addressed receipts + `Run` dataclass (mono timing, counters) |
+| `runs.py` | Content-addressed receipts + A-RUN measurement (runs.jsonl, usage receipts) |
 | `budget.py` | Enforced spend brake (SpendLimits: crossing call logs, next refused; pulse gate) |
 | `VALIDATORS.md` | Dummy-judge contract |
 | `staging/` | Pruned subsystems (lanes, triage) — Seed0-side, recoverable |
@@ -54,8 +55,19 @@ question) ride in every press row with question + context + choice;
 ## State (per repo, `.atask/`)
 
 `goal.json` · `tasks.jsonl` · `h-tasks.jsonl` · `a-logs/` · `reports/`
-(validators check 5 sections) · `validators/` · `runs/` · `presses.jsonl`
-· `events.jsonl` · `corrections.jsonl` · `pulse.jsonl` · `HALT.json`.
+(validators check 5 sections) · `validators/` · `runs/` (proof receipts) ·
+`runs.jsonl` (A-RUN measurements) · `runs-open/` (in-flight runs) ·
+`presses.jsonl` · `events.jsonl` · `corrections.jsonl` · `pulse.jsonl` · `HALT.json`.
+
+## A-RUN: every execution measured
+
+One task, many attempts: `run start` opens `r-xxxx` (env: `ALOOP_RUN_ID` /
+`ALOOP_TASK_ID` for the worker wrapper), `run usage` records the worker's
+usage receipt (tokens + source + reported cost; unknown stays null, never
+estimated), `run finish` closes with failed/validated/abandoned. Derived
+per task: duration/tokens/cost = Σ runs, attempts = n runs. The queue +
+`blocked_by` edges already form the DAG — no framework added, missions
+forecast from run history downstream.
 
 ## Layers (what lives where)
 

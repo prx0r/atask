@@ -13,6 +13,8 @@ not depend on the answer.
 2. **A-tasks.** Each maps to goal indices and carries its own acceptance +
    evidence plan. READY = JUSTIFIED/EXECUTING with all `blocked_by` DONE.
    Branch deeper with `spawn` (children finish first, depth 8 refuses).
+   Every execution is one A-RUN (`run start/usage/finish`): time, tokens
+   (+source), reported cost, result. Unknown stays null — never estimate.
 3. **A-logs.** Every action appends a line tagging covered acceptance
    indices + re-runnable evidence (`command:...`). No log, no claim.
 4. **A-proof.** A validator script judges log-vs-criteria; the stoplight

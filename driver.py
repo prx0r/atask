@@ -128,9 +128,23 @@ def pulse(root: Path) -> dict:
             _emit(root, "validator.failed", task_id=r["id"],
                   reasons=sl["missing"][:4])
     recs = load(q)  # refresh after promotions (single re-read)
-    orders = [{"id": r.get("id"), "summary": (r.get("summary") or "")[:100],
-               "acceptance": (r.get("acceptance") or [])[:3]}
-              for r in ready(recs)]
+    from runs import task_run_stats as _stats
+    last_fail: dict = {}
+    for ev in _eread(root, "validator.failed"):
+        rs = ev.get("reasons") or []
+        last_fail[ev.get("task_id", "")] = (rs[0] if rs else "fail")[:120]
+    orders = []
+    for r in ready(recs):
+        st = _stats(root, r.get("id"))
+        orders.append({"id": r.get("id"),
+                       "summary": (r.get("summary") or "")[:100],
+                       "acceptance": (r.get("acceptance") or [])[:3],
+                       "attempts": st["attempts"],
+                       "tokens": {"in": st["input_tokens"],
+                                  "out": st["output_tokens"],
+                                  "known": st["tokens_known"]},
+                       "cost_usd": st["cost_usd"],
+                       "last_validator": last_fail.get(r.get("id"), "ok")})
     still_reported = [r.get("id") for r in recs
                       if r.get("status") == "REPORTED"]
     halt_legal = not orders and not nogos and not still_reported

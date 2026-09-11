@@ -86,24 +86,190 @@ class Run:
             import uuid as _uuid
             self.run_id = "r-" + _uuid.uuid4().hex[:8]
 
+@dataclass
+class Run:
+    """One execution attempt at a task (the A-RUN measurement primitive).
+    Wall clock says WHEN, monotonic clock says HOW LONG (NTP-immune).
+    Token counts are facts with a source; unknown stays null, never
+    estimated silently. Cost is REPORTED (providers change prices);
+    analytics re-derives from model+tokens. Results: running/failed/
+    validated/abandoned."""
+    task_id: str
+    run_id: str = ""
+    attempt: int = 1
+    started_at: float = field(default_factory=time.time)
+    started_mono_ns: int = field(default_factory=time.monotonic_ns)
+    ended_at: float | None = None
+    duration_ms: int | None = None
+    worker: str = ""
+    provider: str = ""
+    model: str = ""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_tokens: int | None = None
+    token_source: str = "unknown"
+    reported_cost_usd: float | None = None
+    # Legacy spend counters (kept: log --cost/--tokens charges these).
+    spent_usd: float = 0.0
+    tokens_used: int = 0
+    tool_calls: int = 0
+    result: str = "running"
+    validator: str = ""
+
+    TOKEN_SOURCES = ("provider", "gateway", "agent", "estimated", "unknown")
+    RESULTS = ("running", "failed", "validated", "abandoned")
+
+    def __post_init__(self):
+        if not self.run_id:
+            import uuid as _uuid
+            self.run_id = "r-" + _uuid.uuid4().hex[:8]
+        if self.token_source not in self.TOKEN_SOURCES:
+            raise ValueError(f"bad token_source (choose: {self.TOKEN_SOURCES})")
+        if self.result not in self.RESULTS:
+            raise ValueError(f"bad result (choose: {self.RESULTS})")
+
     def note(self, cost_usd: float = 0.0, tokens: int = 0, tools: int = 0):
         self.spent_usd = round(self.spent_usd + cost_usd, 6)
         self.tokens_used += int(tokens)
         self.tool_calls += int(tools)
         return self.snapshot()
 
+    def usage(self, input_tokens: int | None = None,
+              output_tokens: int | None = None,
+              cached_tokens: int | None = None,
+              token_source: str = "agent",
+              reported_cost_usd: float | None = None,
+              model: str = "", provider: str = "", worker: str = ""):
+        """Worker-reported usage receipt. Nulls stay null (honest unknown)."""
+        if token_source not in self.TOKEN_SOURCES:
+            raise ValueError(f"bad token_source (choose: {self.TOKEN_SOURCES})")
+        if input_tokens is not None:
+            self.input_tokens = int(input_tokens)
+        if output_tokens is not None:
+            self.output_tokens = int(output_tokens)
+        if cached_tokens is not None:
+            self.cached_tokens = int(cached_tokens)
+        self.token_source = token_source
+        if reported_cost_usd is not None:
+            self.reported_cost_usd = float(reported_cost_usd)
+        if model:
+            self.model = model
+        if provider:
+            self.provider = provider
+        if worker:
+            self.worker = worker
+        return self.snapshot()
+
     def elapsed_ms(self) -> int:
+        if self.duration_ms is not None:
+            return self.duration_ms
         return (time.monotonic_ns() - self.started_mono_ns) // 1_000_000
 
-    def finish(self, outcome: str) -> dict:
-        self.finished = True
-        self.outcome = outcome
+    def finish(self, result: str, validator: str = "") -> dict:
+        if result not in self.RESULTS or result == "running":
+            raise ValueError(f"bad result (choose: failed/validated/abandoned)")
+        self.ended_at = time.time()
+        self.duration_ms = self.elapsed_ms()
+        self.result = result
+        self.validator = validator[:200]
         return self.snapshot()
 
     def snapshot(self) -> dict:
         d = asdict(self)
         d["elapsed_ms"] = self.elapsed_ms()
+        d.pop("TOKEN_SOURCES", None)
+        d.pop("RESULTS", None)
         return d
+
+
+RUNS_LOG = "runs.jsonl"
+OPEN_DIR = "runs-open"
+
+
+def open_runs_dir(root: str | Path) -> Path:
+    p = Path(root) / OPEN_DIR
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def save_open(run: Run, root: str | Path) -> Path:
+    p = open_runs_dir(root) / f"{run.run_id}.json"
+    p.write_text(json.dumps(run.snapshot(), sort_keys=True))
+    return p
+
+
+def load_open(run_id: str, root: str | Path) -> Run | None:
+    p = Path(root) / OPEN_DIR / f"{run_id}.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text())
+    except Exception:
+        return None
+    d.pop("elapsed_ms", None)
+    return Run(**{k: v for k, v in d.items() if k in Run.__dataclass_fields__})
+
+
+def list_open(root: str | Path, task_id: str = "") -> list[dict]:
+    out = []
+    d = Path(root) / OPEN_DIR
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("r-*.json")):
+        r = load_open(p.stem, root)
+        if r and (not task_id or r.task_id == task_id):
+            out.append(r.snapshot())
+    return out
+
+
+def append_finished(run: Run, root: str | Path) -> dict:
+    """Crash-safe close: append final record, remove the open stub."""
+    snap = run.snapshot()
+    with open(Path(root) / RUNS_LOG, "a") as f:
+        f.write(json.dumps(snap, sort_keys=True) + "\n")
+    try:
+        (Path(root) / OPEN_DIR / f"{run.run_id}.json").unlink()
+    except OSError:
+        pass
+    return snap
+
+
+def read_runs(root: str | Path, task_id: str = "") -> list[dict]:
+    """Finished runs (optional task filter). Missing file = []."""
+    p = Path(root) / RUNS_LOG
+    if not p.exists():
+        return []
+    rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    return [r for r in rows if not task_id or r.get("task_id") == task_id]
+
+
+def task_run_stats(root: str | Path, task_id: str) -> dict:
+    """Derived per-task totals: duration/tokens/cost = Σ runs; attempts = n."""
+    runs = read_runs(root, task_id)
+    tot = {"attempts": len(runs), "elapsed_ms": 0, "input_tokens": 0,
+           "output_tokens": 0, "cached_tokens": 0, "cost_usd": 0.0,
+           "results": [r.get("result", "") for r in runs],
+           "last_result": runs[-1].get("result", "") if runs else "",
+           "tokens_known": True}
+    for r in runs:
+        tot["elapsed_ms"] += int(r.get("duration_ms") or 0)
+        for k in ("input_tokens", "output_tokens", "cached_tokens"):
+            v = r.get(k)
+            if v is None:
+                tot["tokens_known"] = False
+            else:
+                tot[k] += int(v)
+        if r.get("reported_cost_usd") is not None:
+            tot["cost_usd"] = round(tot["cost_usd"] + float(r["reported_cost_usd"]), 6)
+    # Legacy spend counters ride along so old data still totals.
+    try:
+        import atask as _at
+        recs = {x.get("id"): x for x in _at.load(Path(root) / "tasks.jsonl")}
+        rec = recs.get(task_id, {})
+        tot["cost_usd"] = round(tot["cost_usd"] + float(rec.get("spent_usd", 0.0) or 0.0), 6)
+    except Exception:
+        pass
+    return tot
 
 
 if __name__ == "__main__":

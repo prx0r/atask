@@ -23,6 +23,10 @@ Usage:
   python3 atask.py list [--status READY] [--dir .atask]
   python3 atask.py ready [--dir .atask]
   python3 atask.py justify|execute|report --id a-slug
+  python3 atask.py run start --id a-slug --worker opencode --model mimo-v2.5
+  # ... work happens, worker reports usage ...
+  python3 atask.py run usage --run r-xxxx --input-tokens 48321 --output-tokens 7132 --cost 0.0831
+  python3 atask.py run finish --run r-xxxx --result validated --validator pytest
   python3 atask.py log --id a-slug --covers 0 --evidence "command:pytest tests/ -q"
   python3 atask.py stoplight --id a-slug
   python3 atask.py done --id a-slug --report reports/a-slug.md --receipt sha256:...
@@ -55,6 +59,18 @@ DEFAULT_DIR = ".atask"
 
 def d(p: str | Path, *parts: str) -> Path:
     return Path(p, *parts)
+
+
+def _opt_int(v) -> int | None:
+    if v is None:
+        return None
+    return int(float(v))
+
+
+def _opt_float(v) -> float | None:
+    if v is None:
+        return None
+    return float(v)
 
 
 def load(queue: Path) -> list[dict]:
@@ -583,6 +599,21 @@ def main(argv: list[str] | None = None) -> int:
     p_ans.add_argument("--status", default="answered",
                        choices=("answered", "denied"))
     _dir(sub.add_parser("hlist"))
+    p_run = _dir(sub.add_parser("run"))
+    p_run.add_argument("op", choices=("start", "usage", "finish", "list"))
+    p_run.add_argument("--id", default=None, help="task id (start/list)")
+    p_run.add_argument("--run", default=None, help="run id (usage/finish)")
+    p_run.add_argument("--worker", default="")
+    p_run.add_argument("--model", default="")
+    p_run.add_argument("--provider", default="")
+    p_run.add_argument("--input-tokens", default=None)
+    p_run.add_argument("--output-tokens", default=None)
+    p_run.add_argument("--cached-tokens", default=None)
+    p_run.add_argument("--token-source", default="agent")
+    p_run.add_argument("--cost", default=None)
+    p_run.add_argument("--result", default="validated",
+                       choices=("failed", "validated", "abandoned"))
+    p_run.add_argument("--validator", default="")
     p_bud = _dir(sub.add_parser("budget"))
     p_bud.add_argument("op", choices=("set", "show", "record", "check"))
     p_bud.add_argument("--usd", default=None)
@@ -753,6 +784,77 @@ def main(argv: list[str] | None = None) -> int:
         for h in open_h(root):
             print(f"{h['id']} [{h.get('kind')}] task={h.get('task')} "
                   f"need={h.get('need','')[:80]}")
+        return 0
+
+    if a.cmd == "run":
+        import runs as _runs
+        if a.op == "start":
+            if not a.id:
+                print("run start needs --id (task id)")
+                return 1
+            q = root / "tasks.jsonl"
+            recs = load(q)
+            by_id = {r.get("id"): r for r in recs}
+            if a.id not in by_id:
+                print(f"unknown task: {a.id}")
+                return 1
+            rec = by_id[a.id]
+            rec["attempts"] = int(rec.get("attempts", 0)) + 1
+            rec["status"] = "EXECUTING"
+            save_all(recs, q)
+            run = _runs.Run(task_id=a.id, attempt=rec["attempts"],
+                            worker=a.worker, model=a.model, provider=a.provider)
+            _runs.save_open(run, root)
+            _emit(root, "run.started", task_id=a.id, run_id=run.run_id,
+                  attempt=run.attempt, worker=a.worker, model=a.model)
+            print(json.dumps({"run_id": run.run_id, "task_id": a.id,
+                              "attempt": run.attempt,
+                              "env": {"ALOOP_RUN_ID": run.run_id,
+                                      "ALOOP_TASK_ID": a.id}}))
+            return 0
+        if a.op == "list":
+            out = _runs.list_open(root, a.id or "")
+            if not a.id:
+                out += [{"run_id": r["run_id"], "task_id": r["task_id"],
+                         "result": r.get("result", "")}
+                        for r in _runs.read_runs(root)[-10:]]
+            print(json.dumps(out, indent=1)[:3000])
+            return 0
+        if not a.run:
+            print(f"run {a.op} needs --run (run id)")
+            return 1
+        run = _runs.load_open(a.run, root)
+        if run is None:
+            print(f"unknown open run: {a.run}")
+            return 1
+        if a.op == "usage":
+            try:
+                run.usage(
+                    input_tokens=_opt_int(a.input_tokens),
+                    output_tokens=_opt_int(a.output_tokens),
+                    cached_tokens=_opt_int(a.cached_tokens),
+                    token_source=a.token_source,
+                    reported_cost_usd=_opt_float(a.cost),
+                    model=a.model, provider=a.provider, worker=a.worker)
+            except ValueError as e:
+                print(str(e)[:160])
+                return 1
+            _runs.save_open(run, root)
+            _emit(root, "resource.used", task_id=run.task_id, run_id=run.run_id,
+                  cost_usd=run.reported_cost_usd, tokens=run.output_tokens,
+                  token_source=run.token_source, model=run.model)
+            print(json.dumps(run.snapshot(), indent=1)[:2000])
+            return 0
+        try:
+            snap = run.finish(a.result, a.validator)
+        except ValueError as e:
+            print(str(e)[:160])
+            return 1
+        _runs.append_finished(run, root)
+        _emit(root, "run.finished", task_id=run.task_id, run_id=run.run_id,
+              outcome=a.result, elapsed_ms=snap["elapsed_ms"],
+              cost_usd=run.reported_cost_usd, validator=a.validator)
+        print(json.dumps(snap, indent=1)[:2000])
         return 0
 
     if a.cmd == "budget":

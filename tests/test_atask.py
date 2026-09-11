@@ -645,9 +645,20 @@ class TestEventSubstrate(unittest.TestCase):
         r = Run(task_id="a-x")
         r.note(cost_usd=0.02, tokens=100, tools=3)
         snap = r.finish("validated")
-        self.assertEqual(snap["outcome"], "validated")
+        self.assertEqual(snap["result"], "validated")
         self.assertAlmostEqual(snap["spent_usd"], 0.02)
         self.assertGreaterEqual(snap["elapsed_ms"], 0)
+
+    def test_run_unknown_tokens_stay_null(self):
+        from runs import Run
+        r = Run(task_id="a-x")
+        snap = r.finish("failed", "pytest")
+        self.assertIsNone(snap["input_tokens"])
+        self.assertEqual(snap["token_source"], "unknown")
+        with self.assertRaises(ValueError):
+            r.usage(token_source="guess")
+        with self.assertRaises(ValueError):
+            Run(task_id="a-x", result="maybe")
 
     def test_bats_block_with_remaining(self):
         from driver import resources
@@ -908,6 +919,105 @@ class TestBudgetEnforced(unittest.TestCase):
         self.assertIn("error", rep)
         self.assertIn("budget", rep["error"].lower())
         self.assertFalse(rep["halt_legal"])
+
+
+class TestARun(unittest.TestCase):
+    def test_start_usage_finish_lifecycle(self):
+        from runs import list_open, read_runs, task_run_stats
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-r")
+        rc = atask.main(["run", "start", "--dir", root, "--id", "a-r",
+                         "--worker", "opencode", "--model", "mimo-v2.5",
+                         "--provider", "openrouter"])
+        self.assertEqual(rc, 0)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-r"]["status"], "EXECUTING")
+        self.assertEqual(by_id["a-r"]["attempts"], 1)
+        opens = list_open(root, "a-r")
+        self.assertEqual(len(opens), 1)
+        rid = opens[0]["run_id"]
+        rc = atask.main(["run", "usage", "--dir", root, "--run", rid,
+                         "--input-tokens", "48321", "--output-tokens", "7132",
+                         "--cached-tokens", "22100", "--token-source", "provider",
+                         "--cost", "0.0831"])
+        self.assertEqual(rc, 0)
+        rc = atask.main(["run", "finish", "--dir", root, "--run", rid,
+                         "--result", "failed", "--validator", "pytest"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(list_open(root, "a-r"), [])
+        rows = read_runs(root, "a-r")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["result"], "failed")
+        self.assertEqual(rows[0]["input_tokens"], 48321)
+        self.assertEqual(rows[0]["token_source"], "provider")
+        self.assertAlmostEqual(rows[0]["reported_cost_usd"], 0.0831)
+        self.assertGreaterEqual(rows[0]["duration_ms"], 0)
+        st = task_run_stats(root, "a-r")
+        self.assertEqual(st["attempts"], 1)
+        self.assertEqual(st["input_tokens"], 48321)
+        self.assertTrue(st["tokens_known"])
+
+    def test_three_runs_aggregate(self):
+        from runs import task_run_stats
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        for res, cost in (("failed", 0.02), ("failed", 0.03), ("validated", 0.05)):
+            atask.main(["run", "start", "--dir", root, "--id", "a-m",
+                        "--model", "mimo-v2.5"])
+            from runs import list_open
+            rid = list_open(root, "a-m")[0]["run_id"]
+            atask.main(["run", "usage", "--dir", root, "--run", rid,
+                        "--input-tokens", "1000", "--output-tokens", "100",
+                        "--cost", str(cost)])
+            atask.main(["run", "finish", "--dir", root, "--run", rid,
+                        "--result", res])
+        st = task_run_stats(root, "a-m")
+        self.assertEqual(st["attempts"], 3)
+        self.assertEqual(st["input_tokens"], 3000)
+        self.assertAlmostEqual(st["cost_usd"], 0.10)
+        self.assertEqual(st["results"], ["failed", "failed", "validated"])
+        self.assertEqual(st["last_result"], "validated")
+
+    def test_abandon_and_unknown_run_refused(self):
+        from runs import list_open, read_runs
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-q")
+        atask.main(["run", "start", "--dir", root, "--id", "a-q"])
+        from runs import list_open as _lo
+        rid = _lo(root, "a-q")[0]["run_id"]
+        rc = atask.main(["run", "finish", "--dir", root, "--run", rid,
+                         "--result", "abandoned"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(read_runs(root, "a-q")[0]["result"], "abandoned")
+        rc = atask.main(["run", "finish", "--dir", root, "--run", "r-deadbeef",
+                         "--result", "validated"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(list_open(root), [])
+
+    def test_pulse_orders_carry_run_stats(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-o")
+        atask.main(["run", "start", "--dir", root, "--id", "a-o",
+                    "--model", "mimo-v2.5"])
+        from runs import list_open
+        rid = list_open(root, "a-o")[0]["run_id"]
+        atask.main(["run", "usage", "--dir", root, "--run", rid,
+                    "--input-tokens", "500", "--output-tokens", "50",
+                    "--cost", "0.01"])
+        atask.main(["run", "finish", "--dir", root, "--run", rid,
+                    "--result", "failed", "--validator", "pytest"])
+        atask.set_status("a-o", "EXECUTING", root)
+        rep = driver_pulse(root)
+        self.assertEqual(len(rep["orders"]), 1)
+        o = rep["orders"][0]
+        self.assertEqual(o["attempts"], 1)
+        self.assertEqual(o["tokens"]["in"], 500)
+        self.assertEqual(o["cost_usd"], 0.01)
 
 
 if __name__ == "__main__":

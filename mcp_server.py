@@ -74,15 +74,25 @@ def _call(name: str, args: dict):
         z["recent_events"] = events_read(ROOT, limit=5)
         return z
     if name == "a_task":
+        from runs import task_run_stats as _stats
         recs = load(ROOT / "tasks.jsonl")
         st = (args or {}).get("status")
         if st == "READY":
             recs = ready(recs)
         elif st:
             recs = [r for r in recs if r.get("status") == st]
-        return [{"id": r["id"], "status": r.get("status"),
-                 "summary": r.get("summary", "")[:200],
-                 "acceptance": (r.get("acceptance") or [])[:5]} for r in recs]
+        out = []
+        for r in recs:
+            s = _stats(ROOT, r["id"])
+            out.append({"id": r["id"], "status": r.get("status"),
+                        "summary": r.get("summary", "")[:200],
+                        "acceptance": (r.get("acceptance") or [])[:5],
+                        "attempts": s["attempts"],
+                        "tokens": {"in": s["input_tokens"], "out": s["output_tokens"],
+                                   "known": s["tokens_known"]},
+                        "cost_usd": s["cost_usd"],
+                        "last_result": s["last_result"]})
+        return out
     if name == "a_proof":
         return stoplight((args or {})["id"], ROOT)
     if name == "a_ask":
