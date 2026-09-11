@@ -1,5 +1,12 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — a-plan.md saved (compiler vision, not kernel)
+- Saved `a-plan.md` verbatim + kernel-status mapping per section.
+  Standing split enforced: forecasts never enter the queue; compiler
+  reads runs/events/blocks/metrics, kernel stays measurement+control.
+- Nothing new built for this: correctly a doc commit. The 50-task
+  FUTURE_DAG stays hand-written until a compiler earns the job.
+
 ## 2026-09-11 — htask gaps closed (session `hint`, GOAL_DONE, 90/90)
 - Spec review verdict was ~60%; closed to ~90%: M_PROMOTE gates (zero
   marginal gain refused, reason required), capabilities.json graph
