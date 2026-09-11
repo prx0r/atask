@@ -1,5 +1,43 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — peer review: process vs ideas (not going well, honestly)
+Verdict: the kernel works; the process around it leaks. Ranked gaps:
+
+1. AUTONOMY UNPROVEN. Every turn this entire history was operator-driven.
+   Cron never configured, H-driver D1/D2/D3 open since seed0. The loop
+   has never run unattended once. Nothing else matters until one
+   overnight cron run completes, promotes, and logs without touch.
+2. COMPLIANCE IS OPERATOR-DEPENDENT. The framework gates the queue, not
+   the worker. Skipped a-logs, loose runs, and goal overwrites all
+   happened outside any gate. Missing: make bypassing harder than
+   complying (e.g. wrapper-only entry, goal history append-only).
+3. GOAL ROTATION DESTROYS HISTORY. Single goal.json overwritten per run;
+   old definitions survive only in ledger prose; covers_goal orphaned.
+   Fix: goals.jsonl append-only with eras; miners scope by era.
+4. FIVE OVERLAPPING LOGS. presses + events + pulse + runs.jsonl + a-logs
+   record overlapping facts after we agreed on one stream. Consolidate
+   or document the split (keypad dataset vs substrate vs ticks).
+5. SOFT COVERS REMAIN. Required evidence is hard, but evidence-free
+   a-log lines still count toward acceptance covers. A trivial required
+   echo + trust covers passes. Decide: covers need evidence-bearing
+   lines, or accept the two-tier proof explicitly.
+6. BRAKE NEVER TESTED IN ANGER. Caps exist, enforcement tested with
+   toy cents; no dogfood run ever set a real cap. Set one next run.
+7. TOKEN THRIFT IS CHAT-DEEP. Tooling went quiet; my messages didn't
+   until forced. This session: millions of tokens, $0.50+, framework
+   tracked $0 until the last goal. Quiet mode must cover the operator
+   (me), not just the CLI.
+8. GREEN-THROUGH-CRUFT HAPPENED. Duplicate Run class shipped green.
+   Lesson applied (schema-shape test), principle: prefer invariant
+   tests (audit) over example tests.
+
+What's genuinely going well: gates fired correctly on every real
+violation (no false refuses logged); receipts+ledger discipline held
+across 15+ commits; push hygiene (one-shot URLs, env cleared) held;
+event/audit substrate caught bugs unit tests couldn't see. The
+foundation is sound — the next 80% is volume + unattended operation,
+not more kernel.
+
 ## 2026-09-11 — quiet + incremental session (GOAL_DONE, 71/71)
 - `--quiet/-q` on all three CLIs: close-lines only, JSON stays in files.
   Adopted in my own runs above (one-liners vs blobs). Default output
