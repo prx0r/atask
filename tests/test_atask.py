@@ -1342,6 +1342,21 @@ class TestMinimalPass(unittest.TestCase):
         rep = driver_pulse(root)
         self.assertTrue(rep["halt_legal"])
 
+    def test_pydantic_views(self):
+        try:
+            from meters.views import RunReport
+        except ImportError:
+            self.skipTest("pydantic adapter unavailable")
+        snap = {"run_id": "r-1", "task_id": "a-1", "started_at": 1.0,
+                "input_tokens": 100, "output_tokens": 10,
+                "token_source": "provider", "reported_cost_usd": 0.01,
+                "result": "completed"}
+        rep = RunReport.from_kernel(snap)
+        self.assertTrue(rep.tokens_known and rep.cost_known)
+        bad = dict(snap, token_source="guess")
+        with self.assertRaises(Exception):
+            RunReport.from_kernel(bad)
+
     def test_venue_gaps_become_htask_specs(self):
         from meters.venue_auth import audit
         rep = audit(env={})

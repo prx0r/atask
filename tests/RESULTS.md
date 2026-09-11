@@ -1,5 +1,17 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — money run with brake live (GOAL_DONE, 98/98)
+- Timing: every run mono-timed (e.g. 175ms–8.7s this goal).
+- Budgets: caps $2/5M set; brake FIRED mid-goal on token cap
+  (3.9M carried + 1.3M new), refusing pulse fail-closed. Topped up
+  to $5/20M deliberately on record (costs are attributed-notional
+  on free tier). First live brake event, correct behavior.
+- Tokens: runs via --from-session carry real provider counts
+  (652K–657K in/run); pydantic views validate (98th test).
+- Money: pro zip builds (2656B), listing draft states $0 revenue
+  honestly. No sale claimed. Hermes lane: documented as backend
+  mapping only — no live Hermes execution exists here; NOT claimed.
+
 ## 2026-09-11 — f-24/25/26 + run-start guard (97/97)
 - f-24 venue_auth adapter (env gaps → h-task specs, secrets never read).
 - f-25 live contention: two processes raced one board claim, exactly
