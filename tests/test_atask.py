@@ -712,5 +712,93 @@ class TestEventSubstrate(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+        self.assertEqual(bad, [])
+
+
+LEGAL_EDGES = {
+    "PROPOSED": {"JUSTIFIED", "REJECTED"},
+    "JUSTIFIED": {"EXECUTING", "REJECTED", "PAUSED"},
+    "EXECUTING": {"REPORTED", "PAUSED", "REJECTED", "EXECUTING"},
+    "PAUSED": {"EXECUTING", "REJECTED"},
+    "REPORTED": {"DONE", "EXECUTING", "REJECTED"},
+    "DONE": set(),
+    "REJECTED": {"PROPOSED"},
+    "": {"PROPOSED", "JUSTIFIED", "EXECUTING", "PAUSED", "REPORTED", "DONE"},
+}
+
+
+def audit_event_stream(root) -> list[str]:
+    """Invariant audit over events.jsonl. Empty = clean stream."""
+    from events import read as eread
+    rows = eread(root)
+    bad = []
+    monos = [r.get("mono_ns", 0) for r in rows]
+    if monos != sorted(monos):
+        bad.append("mono_ns not non-decreasing")
+    asked = {r.get("hid") for r in rows if r.get("event") == "human.asked"}
+    for r in rows:
+        if r.get("event") == "human.choice" and r.get("hid") not in asked:
+            bad.append(f"choice without ask: {r.get('hid')}")
+    started = {(r.get("task_id")) for r in rows if r.get("event") == "run.started"}
+    for r in rows:
+        if r.get("event") == "run.finished" and r.get("task_id") not in started:
+            bad.append(f"finish without start: {r.get('task_id')}")
+    if len([r for r in rows if r.get("event") == "goal.done"]) > 1:
+        bad.append("goal.done emitted more than once")
+    for r in rows:
+        if r.get("event") == "task.status":
+            if r.get("to") not in LEGAL_EDGES.get(r.get("from", ""), set()):
+                bad.append(f"illegal edge {r.get('from')} -> {r.get('to')}")
+    done = {r.get("task_id") for r in rows if r.get("event") == "run.finished"}
+    passed = {r.get("task_id") for r in rows if r.get("event") == "validator.passed"}
+    for t in done:
+        if t not in passed:
+            bad.append(f"DONE without validator.passed: {t}")
+    return bad
+
+
+class TestEventAudit(unittest.TestCase):
+    def test_scripted_build_audits_clean(self):
+        from events import read as eread
+        from instrument import digest, run
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "g", ["a runs", "b set"])
+        add_task(root, "a-a", accept=("a runs",))
+        add_task(root, "a-b", accept=("b set",))
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        recs[0]["covers_goal"] = [0]
+        recs[1]["covers_goal"] = [1]
+        atask.save_all(recs, os.path.join(root, "tasks.jsonl"))
+        for tid in ("a-a", "a-b"):
+            atask.set_status(tid, "JUSTIFIED", root)
+        h_escalate(root, "a-b", "pick?", "PREFERENCE", ["x", "y"], "x")
+        run("0", session="s-audit", root=root)  # a-b: PAUSED -> EXECUTING
+        atask.set_status("a-a", "EXECUTING", root)
+        for tid in ("a-a", "a-b"):
+            atask.alog(tid, "work", [0], root, "x", "command:echo ok")
+            rr, vr = write_report(root, tid), write_receipt(root, tid)
+            atask.set_status(tid, "REPORTED", root,
+                             report_ref=rr, validation_ref=vr)
+        rep = driver_pulse(root)
+        self.assertEqual(rep["promoted"], ["a-a", "a-b"])
+        digest(root, "s-audit")
+        rows = eread(root)
+        self.assertGreater(len(rows), 10)
+        self.assertEqual(audit_event_stream(root), [])
+        kinds = {r["event"] for r in rows}
+        self.assertTrue({"run.started", "run.finished", "validator.passed",
+                         "human.asked", "human.choice", "goal.done",
+                         "session.outcome", "task.status"} <= kinds)
+
+    def test_audit_catches_illegal_edge(self):
+        from events import emit as eemit
+        root = fresh_root(self)
+        driver_boot(root)
+        eemit(root, "task.status", task_id="a-x", **{"from": "DONE", "to": "EXECUTING"})
+        bad = audit_event_stream(root)
+        self.assertTrue(any("illegal edge" in b for b in bad))
+
+
 if __name__ == "__main__":
     unittest.main()

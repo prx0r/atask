@@ -207,7 +207,7 @@ def set_status(tid: str, status: str, root: Path, **fields) -> tuple[bool, str]:
         _emit(root, "run.started", task_id=tid, attempt=rec["attempts"])
     rec["status"] = status
     save_all(recs, q)
-    _emit(root, "task.status", task_id=tid, from_status=prev, to=status,
+    _emit(root, "task.status", task_id=tid, **{"from": prev, "to": status},
           attempts=int(rec.get("attempts", 0)))
     if status == "DONE":
         _emit(root, "run.finished", task_id=tid, outcome="validated",
@@ -399,6 +399,10 @@ def answer(root: Path, hid: str, answer_text="",
     affected = []
     if tid in by_id and by_id[tid].get("status") == "PAUSED":
         by_id[tid]["status"] = "EXECUTING"
+        # Resumption opens a new run: the answer changed the world.
+        by_id[tid]["attempts"] = int(by_id[tid].get("attempts", 0)) + 1
+        _emit(root, "run.started", task_id=tid,
+              attempt=by_id[tid]["attempts"], resumed_from=hid)
         affected.append(tid)
     for r in recs:
         if tid and tid in (r.get("blocked_by") or []) \
