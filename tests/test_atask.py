@@ -1143,6 +1143,22 @@ class TestMinimalPass(unittest.TestCase):
         atask.save_all(recs, q)
         self.assertTrue(any("no trust-only" in f for f in atask.verify(root)))
 
+    def test_reject_and_refile(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-bad")
+        atask.set_status("a-bad", "REPORTED", root)
+        rc = atask.main(["reject", "--dir", root, "--id", "a-bad",
+                         "--reasons", "wrong approach"])
+        self.assertEqual(rc, 0)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-bad"]["status"], "REJECTED")
+        self.assertIn("wrong approach", by_id["a-bad"].get("reasons", ""))
+        # rejected tasks leave the missing set (dogfood-proven path)
+        rep = driver_pulse(root)
+        self.assertTrue(rep["halt_legal"])
+
 
 if __name__ == "__main__":
     unittest.main()

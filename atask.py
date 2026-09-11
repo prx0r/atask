@@ -597,6 +597,9 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--id", required=True)
         p.add_argument("--report", default=None)
         p.add_argument("--receipt", default=None)
+    p_rej = _dir(sub.add_parser("reject"))
+    p_rej.add_argument("--id", required=True)
+    p_rej.add_argument("--reasons", default="rejected without reasons recorded")
     p_log = _dir(sub.add_parser("log"))
     p_log.add_argument("--id", required=True)
     p_log.add_argument("--action", default="work")
@@ -717,6 +720,11 @@ def main(argv: list[str] | None = None) -> int:
         ok, msg = set_status(a.id, nxt, root,
                              report_ref=getattr(a, "report", None),
                              validation_ref=getattr(a, "receipt", None))
+        print(msg)
+        return 0 if ok else 1
+
+    if a.cmd == "reject":
+        ok, msg = set_status(a.id, "REJECTED", root, reasons=a.reasons)
         print(msg)
         return 0 if ok else 1
 

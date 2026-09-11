@@ -1,5 +1,26 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — proof run (session `proof1`, GOAL_DONE, docs + MCP)
+- Dogfood goal (4 acceptance) worked to DONE via CLI + digits + pulses.
+  Suite **68/68**, receipt `sha256:0c6de9…03835b`. Pushed `a357412` first
+  (remote==local verified), then built on it.
+- Added `docs/OPERATOR.md` (keypad manual) + `docs/AGENT.md` (system
+  instruction + worker wrapper contract), both gated as task evidence.
+- Live MCP proof: 7-RPC stdio session against the repo's own queue —
+  hello, 5 verbs, proof — all ok (plus unit round-trip test, green).
+- Battle scars (all honest, all in the log):
+  - Declared a bad evidence selector; stoplight refused twice, correctly.
+    Appending corrected lines can't heal history (old lines re-run) →
+    REJECTED + refiled as a-mcp2. Added `reject` CLI (was missing from
+    lifecycle) + refile test.
+  - Fixed my own report typo post-promotion (`Self-reviewnfirst`);
+    disclosed here rather than silently.
+  - `verify` flags 3 pre-rule DONE tasks (no declared evidence) from the
+    earlier selfhost run — grandfathered history, left untouched.
+- Design finding for Seed0: append-only a-logs + re-run-all means a bad
+  evidence claim is unrecoverable except via refile. Correct, but the
+  miner should treat REJECTED→refiled pairs as one unit of learning.
+
 ## 2026-09-11 — final minimal pass (the six fixes)
 - Suite: **67/67 green**. DONE⇒stoplight green inside the transition
   (save→check→revert, no dirty state); direct `done` with full proof
