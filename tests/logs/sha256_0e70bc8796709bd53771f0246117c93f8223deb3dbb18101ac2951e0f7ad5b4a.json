@@ -1,0 +1,11 @@
+{
+ "content": {
+  "kind": "test-run",
+  "passed": 86,
+  "suite": "discover",
+  "tests": 86
+ },
+ "kind": "test-run",
+ "run_id": "sha256:0e70bc8796709bd53771f0246117c93f8223deb3dbb18101ac2951e0f7ad5b4a",
+ "ts": 1789125452.1856818
+}

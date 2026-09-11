@@ -297,6 +297,78 @@ class TestGoal(unittest.TestCase):
         self.assertEqual(rep["items"][0]["mapped"], [])
 
 
+class TestHLife(unittest.TestCase):
+    """One session, full h-task life: claim → verify → expand → accept →
+    pick → deny → reconcile → digest. The digit-driven proof."""
+
+    def test_full_lifecycle_one_session(self):
+        from instrument import digest, run
+        from press import read as press_read
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "g", ["ship"])
+        # Q1: choice with recommendation + operation + alternatives
+        add_task(root, "a-1", accept=("one",))
+        earn(root, "a-1")
+        ok, h1 = h_escalate(root, "a-1", "pick region?", "PREFERENCE",
+                            ["eu", "us"], "eu", operation="op-deploy",
+                            alternatives=["local:unsupported"])
+        self.assertTrue(ok, h1)
+        # Q2: plain approval
+        add_task(root, "a-2", accept=("two",))
+        earn(root, "a-2")
+        ok, h2 = h_escalate(root, "a-2", "ship it?", "AUTHORIZATION",
+                            operation="op-ship")
+        self.assertTrue(ok, h2)
+        # Q3: will be denied
+        add_task(root, "a-3", accept=("three",))
+        earn(root, "a-3")
+        ok, h3 = h_escalate(root, "a-3", "buy it?", "AUTHORIZATION",
+                            operation="op-buy")
+        self.assertTrue(ok, h3)
+        # 8 expands Q1 with op + evidence + alternatives
+        rep = run("8", session="s-hlife", root=root)
+        det = rep["results"][0]["detail"]
+        self.assertEqual(det["hid"], h1)
+        self.assertEqual(det["operation"] if "operation" in det else
+                         det.get("operation"), "op-deploy")
+        self.assertTrue(det["evidence"])
+        self.assertEqual(det["alternatives"],
+                         [{"route": "local", "status": "unsupported"}])
+        # dependent finishes on the prediction BEFORE the human answers
+        add_task(root, "a-dep", accept=("dep",), blocked=("a-1",))
+        finish_task(root, "a-dep")
+        # 0 accepts recommendation on Q1 -> reconcile flips the dependent
+        rep = run("0", session="s-hlife", root=root)
+        self.assertTrue(rep["results"][0]["ok"], rep)
+        # 5 approves Q2, 6 denies Q3
+        self.assertIn("approved", run("5", session="s-hlife", root=root)
+                      ["results"][0]["close"])
+        self.assertIn("denied", run("6", session="s-hlife", root=root)
+                      ["results"][0]["close"])
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-1"]["status"], "EXECUTING")
+        self.assertEqual(by_id["a-2"]["status"], "EXECUTING")
+        self.assertEqual(by_id["a-3"]["status"], "EXECUTING")  # denied replans
+        by_h = {h["id"]: h for h in atask.hload(root)}
+        self.assertEqual(by_h[h1]["answer"], "accepted recommendation: eu")
+        self.assertEqual(by_h[h3]["status"], "denied")
+        # the dependent that ran on prediction re-verified on answer
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-dep"]["status"], "EXECUTING")
+        # press log is the clean digit session
+        rows = [r for r in press_read(root) if r.get("session") == "s-hlife"]
+        self.assertEqual([r["picked_text"] for r in rows],
+                         ["MORE", "ACCEPT", "OK", "NO"])
+        self.assertTrue(all(r["context"]["mode"] == "question" for r in rows))
+        out = digest(root, "s-hlife")
+        self.assertEqual(out["outcome"]["presses"], 4)
+        self.assertEqual(out["outcome"]["h_tasks"].get("answered"), 2)
+        self.assertEqual(out["outcome"]["h_tasks"].get("denied"), 1)
+
+
 class TestSpawn(unittest.TestCase):
     def test_child_inherits_parent_blockers_parent_waits(self):
         root = fresh_root(self)
@@ -1269,6 +1341,23 @@ class TestMinimalPass(unittest.TestCase):
         # rejected tasks leave the missing set (dogfood-proven path)
         rep = driver_pulse(root)
         self.assertTrue(rep["halt_legal"])
+
+    def test_repeated_list_flags_union(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        rc = atask.main(["add", "--dir", root, "--id", "a-u",
+                         "--summary", "u", "--accept", "x", "--accept", "y",
+                         "--covers-goal", "0", "--covers-goal", "1",
+                         "--evidence", "command:echo ok"])
+        self.assertEqual(rc, 0)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertEqual(by_id["a-u"]["covers_goal"], [0, 1])
+        rc = atask.main(["log", "--dir", root, "--id", "a-u",
+                         "--covers", "0", "--covers", "1"])
+        self.assertEqual(rc, 0)
+        from atask import alog_read
+        self.assertEqual(alog_read("a-u", root)[-1]["covers"], [0, 1])
 
 
 class TestPromotionProof(unittest.TestCase):

@@ -1,5 +1,19 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — h-task lifecycle session (GOAL_DONE, 86/86)
+- New `TestHLife`: one session, full digit life — MORE (op+evidence+
+  alternatives shown), ACCEPT, OK, NO, reconcile flips a dependent that
+  ran on prediction, digest 4 presses / 2 answered / 1 denied. The
+  press log reads `MORE ACCEPT OK NO`, all question-mode.
+- Caught live: repeated `--covers/--covers-goal` kept last value only
+  (argparse default-overwrite, same bug class as the old `--dir` one).
+  Fixed with union semantics (`_int_list`, append+comma-split) +
+  regression test. Third instance of this bug class — rule: every
+  multi-value flag uses append, verified by test.
+- Double-answer correctly refused mid-test (flow bug, gate right).
+- Dogfood goal done strictly: a-hlife JUSTIFIED→…→DONE via pulse,
+  acheck 0, digest recorded.
+
 ## 2026-09-11 — htask integration (session `htask1`, GOAL_DONE, 84/84)
 - Spec saved verbatim as `docs/HTASK.md` (+ kernel mapping section).
 - Integrated: BlockClaim (`--operation` required unless exempt,

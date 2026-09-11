@@ -73,6 +73,18 @@ def _opt_float(v) -> float | None:
     return float(v)
 
 
+def _int_list(vals) -> list[int]:
+    """Union of comma lists across repeated flags: --covers 0,1 --covers 2."""
+    if vals is None:
+        return []
+    if isinstance(vals, str):
+        vals = [vals]
+    out = []
+    for v in vals:
+        out += [int(c) for c in str(v).split(",") if c.strip().isdigit()]
+    return sorted(set(out))
+
+
 def load(queue: Path) -> list[dict]:
     queue = Path(queue)
     if not queue.exists():
@@ -759,7 +771,7 @@ def main(argv: list[str] | None = None) -> int:
     p_add.add_argument("--accept", action="append", default=[])
     p_add.add_argument("--blocked-by", action="append", default=[])
     p_add.add_argument("--evidence", action="append", default=[])
-    p_add.add_argument("--covers-goal", default="")
+    p_add.add_argument("--covers-goal", action="append", default=[])
     for name in ("justify", "execute", "report"):
         p = _dir(sub.add_parser(name))
         p.add_argument("--id", required=True)
@@ -771,7 +783,7 @@ def main(argv: list[str] | None = None) -> int:
     p_log = _dir(sub.add_parser("log"))
     p_log.add_argument("--id", required=True)
     p_log.add_argument("--action", default="work")
-    p_log.add_argument("--covers", default="")
+    p_log.add_argument("--covers", action="append", default=[])
     p_log.add_argument("--detail", default="")
     p_log.add_argument("--evidence", default="")
     p_sl = _dir(sub.add_parser("stoplight"))
@@ -798,7 +810,7 @@ def main(argv: list[str] | None = None) -> int:
     p_spawn.add_argument("--summary", required=True)
     p_spawn.add_argument("--accept", action="append", default=[])
     p_spawn.add_argument("--evidence", action="append", default=[])
-    p_spawn.add_argument("--covers-goal", default="")
+    p_spawn.add_argument("--covers-goal", action="append", default=[])
     p_esc = _dir(sub.add_parser("escalate"))
     p_esc.add_argument("--id", required=True)
     p_esc.add_argument("--need", required=True)
@@ -902,8 +914,7 @@ def main(argv: list[str] | None = None) -> int:
                "blocked_by": a.blocked_by, "status": "PROPOSED",
                "report_ref": "", "validation_ref": "",
                "depth": 0,
-               "covers_goal": [int(c) for c in a.covers_goal.split(",")
-                               if c.strip().isdigit()]}
+               "covers_goal": _int_list(a.covers_goal)}
         recs.append(rec)
         save_all(recs, q)
         print(json.dumps({"added": a.id, "status": "PROPOSED"}))
@@ -923,7 +934,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     if a.cmd == "log":
-        covers = [int(c) for c in a.covers.split(",") if c.strip().isdigit()]
+        covers = _int_list(a.covers)
         try:
             e = alog(a.id, a.action, covers, root, a.detail, a.evidence)
         except ValueError as ex:
@@ -990,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if rep.get("goal_done") else 1
 
     if a.cmd == "spawn":
-        cg = [int(c) for c in a.covers_goal.split(",") if c.strip().isdigit()]
+        cg = _int_list(a.covers_goal)
         reqs = []
         for e in a.evidence:
             if ":" in e:
