@@ -1,5 +1,24 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — htask integration (session `htask1`, GOAL_DONE, 84/84)
+- Spec saved verbatim as `docs/HTASK.md` (+ kernel mapping section).
+- Integrated: BlockClaim (`--operation` required unless exempt,
+  `--alt route:status` exhaustion, runtime evidence auto-attached into
+  `block{operation,verdict,evidence,alternatives_checked}`); minimal
+  m-tasks (`mrequest` with counterfactual baseline/requested + marginal
+  pp, `mresolve` approve-once/deny records, no treasury movement);
+  MORE key shows op/evidence/alternatives; init creates m-tasks.jsonl.
+- Caught live: single-goal rotation let retired DONE tasks complete a
+  NEW goal (stale covers_goal). Fixed: `goal set` clears mappings
+  (statuses untouched) + regression test + one-time queue surgery,
+  disclosed. GOAL_DONE now truthful (1 mapped DONE per item).
+- Migration: operation-required broke 13 old call sites (updated, all
+  earn attempts first). Suite 84/84.
+- Repeated-difficulty note: the identical-string edit trap bit 4 more
+  times this session (newline eaten → IndentationError → immediate fix).
+  Process rule adopted: never send matching old/new strings; always
+  append or reword the anchor.
+
 ## 2026-09-11 — proof-of-attempt gate (session `proofgate`, GOAL_DONE, 77/77)
 - `escalate` now refuses untried tasks: ≥2 attempts + a-log lines + a
   FAILED checkable try (red evidence now, or validator.failed event).

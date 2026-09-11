@@ -135,12 +135,17 @@ def _act(key: str, arg, root: Path, session: str, payloads: dict) -> dict:
         else:  # 8 MORE
             if opens:
                 h = opens[0]
+                blk = h.get("block", {}) or {}
                 action, detail = "expand", {"hid": h["id"], "kind": h.get("kind"),
                                             "need": h.get("need", "")[:500],
                                             "options": h.get("options", []),
                                             "recommended": h.get("recommendation", "")[:300],
-                                            "task": h.get("task")}
-                close = f"expanded {h['id']} [{h.get('kind')}]: " + (h.get("need", "")[:200])
+                                            "task": h.get("task"),
+                                            "operation": blk.get("operation", ""),
+                                            "evidence": blk.get("evidence", []),
+                                            "alternatives": blk.get("alternatives_checked", [])}
+                close = (f"expanded {h['id']} [{h.get('kind')}] "
+                         f"op={blk.get('operation','?')}: " + (h.get("need", "")[:150]))
             else:
                 gc = goal_check(root)
                 action, detail = "goal", {"goal_done": gc.get("goal_done"),

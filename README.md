@@ -46,6 +46,7 @@ question) ride in every press row with question + context + choice;
 | `keys.json` + `chain.py` | Key contract + digit grammar |
 | `press.py` | Predictor-shaped rows (shown/picked/question/context/choice) |
 | `mcp_server.py` | Seven verbs over stdio |
+| `docs/HTASK.md` | Escalation design authority (BlockProof, predicates, schema) |
 | `acheck.py` | Exit 0 = native |
 | `runs.py` | Content-addressed receipts + A-RUN measurement (runs.jsonl, usage receipts) |
 | `budget.py` | Enforced spend brake (SpendLimits: crossing call logs, next refused; pulse gate) |

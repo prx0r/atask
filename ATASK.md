@@ -30,9 +30,17 @@ not depend on the answer.
    OF ATTEMPT: ≥2 recorded attempts + a-log lines + a FAILED checkable
    try (red evidence or failed validator) — PHYSICAL/IDENTITY exempt,
    nothing to try there. Status-flapping without evidence farms nothing.
-   File kind + need + options + recommendation, park the lane, keep
-   working the rest. Predictions allowed; answers reconcile dependents
-   back to EXECUTING with a reverify line.
+   File a BLOCK CLAIM: the blocking `--operation` id + checked
+   `--alt route:status` alternatives; the verifier auto-attaches runtime
+   evidence (never your prose) and certifies H_BLOCK, or refuses
+   (= CONTINUE: keep working). Predictions allowed; answers reconcile
+   dependents back to EXECUTING with a reverify line.
+6. **M-ask.** Need machine authority (model/grant/compute)? File
+   `mrequest` with counterfactuals: current best route (success%, cost)
+   vs requested (success%, cost) + reason. The router decides on
+   marginal gain per cent; `mresolve` records approve-once/deny. No
+   treasury moves in-kernel. FAIL (`reject` with reasons) stays a
+   first-class outcome — escalations are never garbage collection.
 
 ## The keypad (the human answers in digits)
 

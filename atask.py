@@ -302,6 +302,14 @@ def goal_set(root: Path, statement: str, acceptance: list[str],
     if deadline_min is not None:
         g["deadline_min"] = deadline_min
     (root / "goal.json").write_text(json.dumps(g, indent=1, sort_keys=True))
+    # Fresh goal = fresh mapping: stale covers_goal from a retired goal
+    # must not complete the new one. Statuses untouched, mappings cleared.
+    q = root / "tasks.jsonl"
+    recs = load(q)
+    for r in recs:
+        if r.get("covers_goal"):
+            r["covers_goal"] = []
+    save_all(recs, q)
     return g
 
 
@@ -408,6 +416,24 @@ def _failed_signal(root: Path, tid: str) -> bool:
     return False
 
 
+def _runtime_evidence(root: Path, tid: str) -> list[str]:
+    """Evidence owned by the runtime, not the LLM: failed a-log lines
+    (action + re-run verdict) plus validator.failed reasons. The claim
+    (need text) rides separately; this list is the proof."""
+    root = Path(root)
+    from events import read as _eread
+    ev: list[str] = []
+    for n, e in enumerate(alog_read(tid, root)):
+        claim = (e.get("evidence", "") or "")
+        if claim.startswith("command:") and check_evidence(claim, root.parent):
+            ev.append(f"alog:{tid}#{n} red: {claim[:100]}")
+    for r in _eread(root, "validator.failed"):
+        if r.get("task_id") == tid:
+            for reason in (r.get("reasons") or [])[:3]:
+                ev.append(f"validator: {reason}"[:140])
+    return ev[:8]
+
+
 def hload(root: Path) -> list[dict]:
     p = Path(root) / "h-tasks.jsonl"
     if not p.exists():
@@ -427,9 +453,14 @@ def open_h(root: Path) -> list[dict]:
 
 def escalate(root: Path, tid: str, need: str, kind: str,
              options: list[str] | None = None,
-             recommendation: str = "", predicted=None) -> tuple[bool, str]:
-    """A-task -> human task. The agent parks the lane and keeps working.
-    kind MUST be a genuine human boundary (refused otherwise)."""
+             recommendation: str = "", predicted=None,
+             operation: str = "", alternatives: list | None = None
+             ) -> tuple[bool, str]:
+    """File a BlockClaim. The agent claims "blocked on <operation>"; the
+    verifier (kind gate + proof-of-attempt gate below) certifies H_BLOCK.
+    Refusal = CONTINUE verdict: keep working. operation names the blocking
+    operation id; alternatives are checked {route: status} (class-C
+    exhaustion); runtime evidence auto-attaches (never the LLM's prose)."""
     import uuid as _uuid
     if kind not in ASK_KINDS:
         return False, (f"refused: {kind!r} is not a human boundary "
@@ -455,13 +486,28 @@ def escalate(root: Path, tid: str, need: str, kind: str,
         if not _failed_signal(root, tid):
             return False, (f"refused: no failed checkable attempt on {tid}; "
                            f"try something with re-runnable evidence first")
+        if not (operation or "").strip():
+            return False, (f"refused: name the blocking operation "
+                           f"(--operation op-id: what exactly can't complete)")
     hid = "h-" + _uuid.uuid4().hex[:6]
     hs = hload(root)
+    alts = []
+    for a_ in (alternatives or []):
+        if isinstance(a_, dict) and a_.get("route"):
+            alts.append({"route": str(a_["route"])[:120],
+                         "status": str(a_.get("status", ""))[:120]})
+        elif isinstance(a_, str) and ":" in a_:
+            r_, s_ = a_.split(":", 1)
+            alts.append({"route": r_.strip()[:120], "status": s_.strip()[:120]})
     hs.append({"id": hid, "task": tid, "kind": kind, "need": need,
                "options": list(options or []),
                "recommendation": recommendation[:500],
                "predicted": predicted, "status": "open",
-               "answer": None, "ts": time.time()})
+               "answer": None, "ts": time.time(),
+               "block": {"operation": (operation or "")[:200],
+                         "verdict": "H_BLOCK",
+                         "evidence": _runtime_evidence(root, tid),
+                         "alternatives_checked": alts}})
     hsave(hs, root)
     by_id[tid]["status"] = "PAUSED"
     by_id[tid]["paused_on"] = hid
@@ -515,6 +561,91 @@ def answer(root: Path, hid: str, answer_text="",
         alog(t, "reverify", [], root,
              f"{status} on {hid}; re-verify before DONE")
     return True, f"{hid} {status}; resumed+reverify: {affected or ['none']}"
+
+
+# ------------------------------------------------------------------
+# M-tasks: machine authority requests. An m-task exists iff the
+# capability is available BUT no current grant authorizes it
+# (M_PROMOTE). Counterfactual fields are REQUIRED: the approver decides
+# on marginal gain, never on "need smarter model". Resolution records
+# the decision only — no treasury moves here; grant activation is
+# human-side, outside the kernel.
+
+
+def mload(root: Path) -> list[dict]:
+    p = Path(root) / "m-tasks.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+
+def msave(recs: list[dict], root: Path) -> None:
+    Path(root).mkdir(parents=True, exist_ok=True)
+    (Path(root) / "m-tasks.jsonl").write_text(
+        "".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+
+
+def open_m(root: Path) -> list[dict]:
+    return [m for m in mload(root) if m.get("status") == "open"]
+
+
+def mrequest(root: Path, tid: str, resource: str, amount_cents: int,
+             baseline_succ: float, baseline_cost: float,
+             req_succ: float, req_cost: float,
+             reason: str = "") -> tuple[bool, str]:
+    """File an M_BLOCK claim with counterfactuals. The router (human for
+    now) decides on Δ success per cent, not on model desire."""
+    import uuid as _uuid
+    root = Path(root)
+    recs = {r.get("id"): r for r in load(root / "tasks.jsonl")}
+    if tid not in recs:
+        return False, f"unknown task: {tid}"
+    if recs[tid].get("status") == "DONE":
+        return False, f"task already DONE: {tid}"
+    if not isinstance(amount_cents, int) or amount_cents <= 0:
+        return False, "amount must be positive integer cents"
+    for v, n in ((baseline_succ, "baseline-succ"), (req_succ, "req-succ")):
+        if not 0 <= float(v) <= 1:
+            return False, f"{n} must be a probability 0..1"
+    mid = "m-" + _uuid.uuid4().hex[:6]
+    ms = mload(root)
+    ms.append({"id": mid, "parent": tid, "resource": resource[:200],
+               "amount_cents": amount_cents,
+               "baseline": {"success": float(baseline_succ),
+                            "cost_usd": float(baseline_cost)},
+               "requested": {"success": float(req_succ),
+                             "cost_usd": float(req_cost)},
+               "marginal_gain_pp": round((float(req_succ) - float(baseline_succ)) * 100, 1),
+               "reason": reason[:500], "status": "open",
+               "decision": None, "ts": time.time()})
+    msave(ms, root)
+    _emit(root, "m.asked", mid=mid, task_id=tid, resource=resource[:120],
+          amount_cents=amount_cents)
+    return True, mid
+
+
+def mresolve(root: Path, mid: str, decision: str,
+             note: str = "") -> tuple[bool, str]:
+    """Record the router's decision. approved-once releases exactly the
+    stated cents for the stated resource, once — tracked by receipt, not
+    by standing permission. denied ends it. Nothing moves money here."""
+    if decision not in ("approved-once", "denied"):
+        return False, "decision must be approved-once|denied"
+    root = Path(root)
+    ms = mload(root)
+    by_m = {m.get("id"): m for m in ms}
+    if mid not in by_m:
+        return False, f"unknown m-task: {mid}"
+    m = by_m[mid]
+    if m.get("status") != "open":
+        return False, f"m-task not open: {mid}"
+    m["status"] = "decided"
+    m["decision"] = decision
+    m["note"] = (note or "")[:500]
+    msave(ms, root)
+    _emit(root, "m.decided", mid=mid, task_id=m.get("parent", ""),
+          decision=decision)
+    return True, f"{mid} {decision}"
 
 
 # ------------------------------------------------------------------
@@ -676,12 +807,31 @@ def main(argv: list[str] | None = None) -> int:
     p_esc.add_argument("--options", default="")
     p_esc.add_argument("--recommend", default="")
     p_esc.add_argument("--predict", default=None)
+    p_esc.add_argument("--operation", default="",
+                       help="blocking operation id (required unless PHYSICAL/IDENTITY)")
+    p_esc.add_argument("--alt", action="append", default=[],
+                       help="checked alternative route:status (repeatable)")
     p_ans = _dir(sub.add_parser("answer"))
     p_ans.add_argument("--hid", required=True)
     p_ans.add_argument("--answer", default="")
     p_ans.add_argument("--status", default="answered",
                        choices=("answered", "denied"))
     _dir(sub.add_parser("hlist"))
+    p_mreq = _dir(sub.add_parser("mrequest"))
+    p_mreq.add_argument("--id", required=True)
+    p_mreq.add_argument("--resource", required=True)
+    p_mreq.add_argument("--amount-cents", required=True)
+    p_mreq.add_argument("--baseline-succ", required=True)
+    p_mreq.add_argument("--baseline-cost", default="0")
+    p_mreq.add_argument("--req-succ", required=True)
+    p_mreq.add_argument("--req-cost", required=True)
+    p_mreq.add_argument("--reason", default="")
+    p_mres = _dir(sub.add_parser("mresolve"))
+    p_mres.add_argument("--mid", required=True)
+    p_mres.add_argument("--decision", required=True,
+                        choices=("approved-once", "denied"))
+    p_mres.add_argument("--note", default="")
+    _dir(sub.add_parser("mlist"))
     p_run = _dir(sub.add_parser("run"))
     p_run.add_argument("op", choices=("start", "usage", "finish", "list"))
     p_run.add_argument("--id", default=None, help="task id (start/list)")
@@ -720,6 +870,8 @@ def main(argv: list[str] | None = None) -> int:
             q.write_text("")
         if not (root / "h-tasks.jsonl").exists():
             (root / "h-tasks.jsonl").write_text("")
+        if not (root / "m-tasks.jsonl").exists():
+            (root / "m-tasks.jsonl").write_text("")
         print(json.dumps({"init": True, "dir": str(root),
                           "close": f"harness ready at {root}. add tasks, drain ready."}))
         return 0
@@ -863,7 +1015,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             print("unparseable --predict (must be JSON)")
             return 1
-        ok, msg = escalate(root, a.id, a.need, a.kind, opts, a.recommend, pred)
+        ok, msg = escalate(root, a.id, a.need, a.kind, opts, a.recommend, pred,
+                           a.operation, a.alt)
         print(msg)
         return 0 if ok else 1
 
@@ -872,6 +1025,30 @@ def main(argv: list[str] | None = None) -> int:
                          getattr(a, "status", None) or "answered")
         print(msg)
         return 0 if ok else 1
+
+    if a.cmd == "mrequest":
+        try:
+            cents = int(a.amount_cents)
+            bs, bc = float(a.baseline_succ), float(a.baseline_cost)
+            rs, rc = float(a.req_succ), float(a.req_cost)
+        except ValueError:
+            print("unparseable numbers (cents int, probs/costs float)")
+            return 1
+        ok, msg = mrequest(root, a.id, a.resource, cents, bs, bc, rs, rc,
+                           a.reason)
+        print(msg)
+        return 0 if ok else 1
+
+    if a.cmd == "mresolve":
+        ok, msg = mresolve(root, a.mid, a.decision, a.note)
+        print(msg)
+        return 0 if ok else 1
+
+    if a.cmd == "mlist":
+        for m in open_m(root):
+            print(f"{m['id']} parent={m.get('parent')} {m.get('resource','')[:60]} "
+                  f"{m.get('amount_cents')}c gain={m.get('marginal_gain_pp')}pp")
+        return 0
 
     if a.cmd == "hlist":
         for h in open_h(root):

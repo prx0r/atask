@@ -244,7 +244,7 @@ def earn(root, tid, marker=None):
                 "--worker", "test", "--model", "test"])
     ev = (f"command:test -f {marker}" if marker
           else "command:python3 -c \"import sys; sys.exit(9)\"")
-    atask.alog(tid, "work", [0], root, "tried", ev)
+    atask.alog(tid, "work", [0], root, "tried blocked-op", ev)
 
 
 class TestGoal(unittest.TestCase):
@@ -281,6 +281,21 @@ class TestGoal(unittest.TestCase):
         self.assertFalse(rep["goal_done"])
         self.assertEqual(rep["items"][1]["mapped"], [])
 
+    def test_goal_rotation_clears_stale_mappings(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "old", ["a", "b"])
+        add_task(root, "a-x")
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        recs[0]["covers_goal"] = [0, 1]
+        recs[0]["status"] = "DONE"
+        atask.save_all(recs, os.path.join(root, "tasks.jsonl"))
+        self.assertTrue(goal_check(root)["goal_done"])
+        goal_set(root, "new", ["c", "d"])
+        rep = goal_check(root)
+        self.assertFalse(rep["goal_done"])
+        self.assertEqual(rep["items"][0]["mapped"], [])
+
 
 class TestSpawn(unittest.TestCase):
     def test_child_inherits_parent_blockers_parent_waits(self):
@@ -316,7 +331,7 @@ class TestHumanQueue(unittest.TestCase):
         earn(root, "a-need")
         ok, hid = h_escalate(root, "a-need", "which API key?", "SECRET",
                              ["key-a", "key-b"], "key-a",
-                             predicted={"key": "key-a"})
+                             predicted={"key": "key-a"}, operation="op-key")
         self.assertTrue(ok, hid)
         by_id = {r["id"]: r for r in
                  atask.load(os.path.join(root, "tasks.jsonl"))}
@@ -343,7 +358,7 @@ class TestHumanQueue(unittest.TestCase):
         self.assertIn("not a human boundary", msg)
         earn(root, "a-lib")
         ok, hid = h_escalate(root, "a-lib", "which region?", "PREFERENCE",
-                             ["eu", "us"], "eu")
+                             ["eu", "us"], "eu", operation="op-region")
         self.assertTrue(ok, hid)
         hs = {h["id"]: h for h in atask.hload(root)}
         self.assertEqual(hs[hid]["kind"], "PREFERENCE")
@@ -395,7 +410,7 @@ class TestDriverCanon(unittest.TestCase):
         goal_set(root, "g", ["x"])
         add_task(root, "a-h")
         earn(root, "a-h")
-        h_escalate(root, "a-h", "decide?", "PREFERENCE")
+        h_escalate(root, "a-h", "decide?", "PREFERENCE", operation="op-decide")
         rep = driver_pulse(root)
         self.assertIn("open_h", rep)
         self.assertEqual(len(rep["open_h"]), 1)
@@ -441,7 +456,8 @@ class TestControlHarness(unittest.TestCase):
         recs[0]["covers_goal"] = [0]
         atask.save_all(recs, os.path.join(root, "tasks.jsonl"))
         earn(root, "a-need")
-        h_escalate(root, "a-need", "pick one?", "PREFERENCE", ["aa", "bb"], "aa")
+        h_escalate(root, "a-need", "pick one?", "PREFERENCE", ["aa", "bb"], "aa",
+                   operation="op-pick")
         rep = run("0", session="s1", root=root)  # ACCEPT = recommended
         self.assertTrue(rep["results"][0]["ok"], rep)
         rows = press_read(root)
@@ -474,7 +490,8 @@ class TestControlHarness(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-need")
         earn(root, "a-need")
-        h_escalate(root, "a-need", "pick?", "PREFERENCE", ["aa", "bb"], "bb")
+        h_escalate(root, "a-need", "pick?", "PREFERENCE", ["aa", "bb"], "bb",
+                   operation="op-pick")
         rep = run("41", session="s1", root=root)  # PICK#1
         self.assertTrue(rep["results"][0]["ok"], rep)
         self.assertIn("option 1", rep["results"][0]["close"])
@@ -487,7 +504,8 @@ class TestControlHarness(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-need")
         earn(root, "a-need")
-        h_escalate(root, "a-need", "pick?", "AMBIGUITY", ["aa"], "aa")
+        h_escalate(root, "a-need", "pick?", "AMBIGUITY", ["aa"], "aa",
+                   operation="op-pick")
         rep = run("8", session="s1", root=root)
         self.assertEqual(rep["results"][0]["action"], "expand")
         self.assertIn("AMBIGUITY", rep["results"][0]["close"])
@@ -506,7 +524,7 @@ class TestControlHarness(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-t")
         earn(root, "a-t")
-        h_escalate(root, "a-t", "say something?", "SECRET")
+        h_escalate(root, "a-t", "say something?", "SECRET", operation="op-say")
         rep = run("7", session="s1", root=root, payloads={"7": "hello human"})
         self.assertEqual(rep["results"][0]["action"], "tell")
         rep = run("7", session="s1", root=root, payloads={"7": "note: retry later"})
@@ -519,7 +537,7 @@ class TestControlHarness(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-s")
         earn(root, "a-s")
-        h_escalate(root, "a-s", "give input", "SECRET")
+        h_escalate(root, "a-s", "give input", "SECRET", operation="op-input")
         rep = run("7", session="s1", root=root,
                   payloads={"7": "my api_key: hunter2hunter2"})
         self.assertFalse(rep["results"][0]["ok"])
@@ -531,12 +549,12 @@ class TestControlHarness(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-t2")
         earn(root, "a-t2")
-        h_escalate(root, "a-t2", "approve?", "AUTHORIZATION")
+        h_escalate(root, "a-t2", "approve?", "AUTHORIZATION", operation="op-appr")
         rep = run("5", session="s1", root=root)
         self.assertIn("approved", rep["results"][0]["close"])
         add_task(root, "a-t3")
         earn(root, "a-t3")
-        h_escalate(root, "a-t3", "approve?", "AUTHORIZATION")
+        h_escalate(root, "a-t3", "approve?", "AUTHORIZATION", operation="op-appr")
         rep = run("6", session="s1", root=root)
         self.assertIn("denied", rep["results"][0]["close"])
         by_h = {h["id"]: h for h in atask.hload(root)}
@@ -649,7 +667,8 @@ class TestEventSubstrate(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-h")
         earn(root, "a-h")
-        h_escalate(root, "a-h", "pick?", "PREFERENCE", ["aa", "bb"], "aa")
+        h_escalate(root, "a-h", "pick?", "PREFERENCE", ["aa", "bb"], "aa",
+                   operation="op-pick")
         h_answer(root, [h["id"] for h in open_h(root)][0], "aa")
         by_kind = {}
         for r in eread(root):
@@ -737,7 +756,8 @@ class TestEventSubstrate(unittest.TestCase):
         driver_boot(root)
         add_task(root, "a-need")
         earn(root, "a-need")
-        h_escalate(root, "a-need", "pick?", "PREFERENCE", ["aa", "bb"], "aa")
+        h_escalate(root, "a-need", "pick?", "PREFERENCE", ["aa", "bb"], "aa",
+                   operation="op-pick")
         run("0", session="s1", root=root)
         rows = eread(root, "human.choice")
         self.assertEqual(len(rows), 1)
@@ -883,7 +903,8 @@ class TestEventAudit(unittest.TestCase):
         for tid in ("a-a", "a-b"):
             atask.set_status(tid, "JUSTIFIED", root)
         earn(root, "a-b", os.path.join(root, "fixed-a-b"))
-        h_escalate(root, "a-b", "pick?", "PREFERENCE", ["x", "y"], "x")
+        h_escalate(root, "a-b", "pick?", "PREFERENCE", ["x", "y"], "x",
+                   operation="op-pick")
         run("0", session="s-audit", root=root)  # a-b: PAUSED -> EXECUTING
         atask.set_status("a-a", "EXECUTING", root)
         open(os.path.join(root, "fixed-a-b"), "w").write("fixed")
@@ -1281,7 +1302,7 @@ class TestPromotionProof(unittest.TestCase):
         root = fresh_root(self)
         driver_boot(root)
         self._tried(root, "a-red", red=True)
-        ok, hid = h_escalate(root, "a-red", "stuck?", "SECRET")
+        ok, hid = h_escalate(root, "a-red", "stuck?", "SECRET", operation="op-red")
         self.assertTrue(ok, hid)
 
     def test_validator_failed_event_allows(self):
@@ -1294,7 +1315,7 @@ class TestPromotionProof(unittest.TestCase):
         atask.set_status("a-vf", "EXECUTING", root)
         atask.alog("a-vf", "work", [0], root, "tried", "")
         eemit(root, "validator.failed", task_id="a-vf", reasons=["x"])
-        ok, hid = h_escalate(root, "a-vf", "stuck?", "AUTHORIZATION")
+        ok, hid = h_escalate(root, "a-vf", "stuck?", "AUTHORIZATION", operation="op-vf")
         self.assertTrue(ok, hid)
 
     def test_physical_exempt(self):
@@ -1313,6 +1334,79 @@ class TestPromotionProof(unittest.TestCase):
             atask.set_status("a-flap", "JUSTIFIED", root)
         ok, msg = h_escalate(root, "a-flap", "stuck?", "AMBIGUITY")
         self.assertFalse(ok)  # attempts high, but no log + no failure
+
+
+class TestBlockClaim(unittest.TestCase):
+    def test_operation_required(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-b")
+        earn(root, "a-b")
+        ok, msg = h_escalate(root, "a-b", "stuck?", "SECRET")
+        self.assertFalse(ok)
+        self.assertIn("operation", msg)
+
+    def test_block_carries_runtime_evidence(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-b")
+        earn(root, "a-b")
+        ok, hid = h_escalate(root, "a-b", "need key?", "SECRET",
+                             operation="op-vault.read",
+                             alternatives=["local-vault:unsupported"])
+        self.assertTrue(ok, hid)
+        hs = {h["id"]: h for h in atask.hload(root)}
+        blk = hs[hid]["block"]
+        self.assertEqual(blk["operation"], "op-vault.read")
+        self.assertEqual(blk["verdict"], "H_BLOCK")
+        self.assertTrue(any("red" in e for e in blk["evidence"]),
+                        blk["evidence"])
+        self.assertEqual(blk["alternatives_checked"],
+                         [{"route": "local-vault", "status": "unsupported"}])
+
+    def test_exempt_needs_no_operation(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-s")
+        ok, hid = h_escalate(root, "a-s", "sign?", "PHYSICAL")
+        self.assertTrue(ok, hid)
+        self.assertEqual(atask.hload(root)[0]["block"]["evidence"], [])
+
+
+class TestMTask(unittest.TestCase):
+    def test_request_needs_counterfactuals(self):
+        from atask import mrequest
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        ok, mid = mrequest(root, "a-m", "gpt-5.6", 17, 0.71, 0.0, 0.92, 0.17,
+                           "need 90% bar")
+        self.assertTrue(ok, mid)
+        ms = {m["id"]: m for m in atask.mload(root)}
+        self.assertEqual(ms[mid]["marginal_gain_pp"], 21.0)
+        self.assertEqual(ms[mid]["status"], "open")
+
+    def test_bad_probability_refused(self):
+        from atask import mrequest
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        ok, msg = mrequest(root, "a-m", "x", 5, 1.5, 0.0, 0.9, 0.1)
+        self.assertFalse(ok)
+        self.assertIn("probability", msg)
+
+    def test_resolve_records_decision(self):
+        from atask import mrequest, mresolve, open_m
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        ok, mid = mrequest(root, "a-m", "gpt-5.6", 17, 0.71, 0.0, 0.92, 0.17)
+        self.assertTrue(ok)
+        ok, msg = mresolve(root, mid, "approved-once", "one shot")
+        self.assertTrue(ok, msg)
+        self.assertEqual(open_m(root), [])
+        ok, msg = mresolve(root, mid, "denied")
+        self.assertFalse(ok)  # decided m-tasks don't reopen
 
 
 class TestQuiet(unittest.TestCase):
