@@ -381,5 +381,115 @@ class TestCLIDirOrder(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(root, "goal.json")))
 
 
+class TestBudget(unittest.TestCase):
+    def test_record_then_refuse_next(self):
+        from budget import Budget, BudgetExceeded, FileBudget
+        b = Budget(max_usd=0.05)
+        b.record(cost=0.03, label="call-1")
+        self.assertFalse(b.exhausted())
+        with self.assertRaises(BudgetExceeded):
+            b.record(cost=0.03, label="call-2")  # crosses: completes, then refuses
+        with self.assertRaises(BudgetExceeded):
+            b.check("call-3")
+
+    def test_file_budget_survives_restart(self):
+        from budget import FileBudget
+        root = fresh_root(self)
+        driver_boot(root)
+        b = FileBudget(root)
+        b.set_caps(1.0, None)
+        b.record(cost=0.25, tokens=100, label="x")
+        b2 = FileBudget(root)  # fresh object, same file
+        self.assertAlmostEqual(b2.spent_usd, 0.25)
+        self.assertEqual(b2.spent_tokens, 100)
+        adv = b2.advertise()
+        self.assertEqual(adv["ATASK_BUDGET_USD"], "0.75")
+
+    def test_unpriced_counts_not_charges(self):
+        from budget import Budget
+        b = Budget(max_usd=0.01)
+        b.record(label="cached")  # no cost: invisible spend, counted
+        self.assertEqual(b.unpriced, 1)
+        self.assertFalse(b.exhausted())
+
+    def test_driver_refuses_when_exhausted(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        from budget import FileBudget
+        FileBudget(root).set_caps(0.01, None)
+        from budget import BudgetExceeded
+        with self.assertRaises(BudgetExceeded):
+            FileBudget(root).record(cost=0.01, label="burn")
+        rep = driver_pulse(root)
+        self.assertIn("error", rep)
+        self.assertIn("budget", rep["error"].lower())
+
+    def test_yaml_caps_seed_budget(self):
+        root = fresh_root(self)
+        driver_boot(root)
+        with open(os.path.join(root, "atask.yaml"), "w") as f:
+            f.write("budget_usd: 2.5\n")
+        from driver import budget_state
+        snap = budget_state(root)["snapshot"]
+        self.assertEqual(snap["max_usd"], 2.5)
+
+
+class TestDelegate(unittest.TestCase):
+    def test_delegate_freezes_brief_and_pins_sha(self):
+        from atask import agents_list, delegate
+        root = fresh_root(self)
+        driver_boot(root)
+        self.assertTrue(any(a["name"] == "coder" for a in agents_list(root)))
+        add_task(root, "a-par")
+        ok, msg = delegate(root, "a-par", "a-sub", "coder",
+                           "implement exactly X with tests")
+        self.assertTrue(ok, msg)
+        by_id = {r["id"]: r for r in
+                 atask.load(os.path.join(root, "tasks.jsonl"))}
+        self.assertIn("a-sub", by_id["a-par"]["blocked_by"])
+        dg = by_id["a-sub"]["delegate"]
+        self.assertEqual(dg["agent"], "coder")
+        bp = os.path.join(root, dg["brief_ref"])
+        self.assertTrue(os.path.isfile(bp))
+        import hashlib as _h
+        sha = _h.sha256(open(bp, "rb").read()).hexdigest()[:16]
+        self.assertEqual(dg["brief_sha"], sha)
+
+    def test_delegate_unknown_lane_refused(self):
+        from atask import delegate
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-par")
+        ok, msg = delegate(root, "a-par", "a-sub", "oracle", "do magic")
+        self.assertFalse(ok)
+        self.assertIn("unknown agent lane", msg)
+
+
+class TestPolicy(unittest.TestCase):
+    def test_prohibited_is_code(self):
+        from atask import policy_check
+        root = fresh_root(self)
+        driver_boot(root)
+        self.assertEqual(policy_check(root, "git push --force")["verdict"], "PROHIBITED")
+        self.assertEqual(policy_check(root, "rm -rf /")["verdict"], "PROHIBITED")
+
+    def test_routes_spend_and_human(self):
+        from atask import policy_check
+        root = fresh_root(self)
+        driver_boot(root)
+        self.assertEqual(policy_check(root, "pay the $5 invoice")["route"], "M")
+        self.assertEqual(policy_check(root, "merge the PR")["route"], "H")
+        self.assertEqual(policy_check(root, "run pytest tests/ -q")["route"], "A")
+
+    def test_repo_can_extend_prohibited(self):
+        from atask import policy_check
+        root = fresh_root(self)
+        driver_boot(root)
+        with open(os.path.join(root, "atask.yaml"), "a") as f:
+            f.write("prohibited:\n  - 'fortnite'\n")
+        rep = policy_check(root, "deploy fortnite behaviour")
+        self.assertEqual(rep["verdict"], "PROHIBITED")
+
+
 if __name__ == "__main__":
     unittest.main()

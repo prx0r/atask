@@ -36,6 +36,9 @@ one shape everywhere, one dashboard over all boxes.
    covers, re-runnable evidence. No log, no claim.
 4. **DONE needs proof.** Report file + resolvable `sha256:` receipt +
    green stoplight (covers + evidence + validator). No receipt, no DONE.
+   Record spend on the a-log (`--cost/--tokens`); an exhausted budget
+   refuses the next pulse. Route every step via `policy` first (P blocks
+   in code, M needs budget, H escalates).
 5. **Blocked on human → escalate, never guess.** `escalate --id ... --need`
    files an h-task with exactly what is needed from whom and parks the
    A-task PAUSED. Keep working the rest, optionally against a `--predict`
@@ -67,8 +70,8 @@ re-enters at PROPOSED, never straight to DONE.)
 
 ```
 driver.py boot → drain READY (execute → a-log → report → receipt → DONE)
-  → spawn sub-tasks where blocked → escalate where human-needed
-  → pulse → halt ONLY with dryness proof (nothing ready, nothing splittable)
+  → spawn sub-tasks where blocked → delegate to lanes with frozen briefs
+  → escalate where human-needed → pulse → halt ONLY with dryness proof
 ```
 
 ## Self-audit

@@ -19,6 +19,18 @@ python3 -m unittest discover tests       # harness self-tests (23 green)
 
 Branch deeper with `spawn`, park on humans with `escalate` / resume with
 `answer`, judge logs with per-task `validators/<id>.py` (see VALIDATORS.md).
+Cap spend with `budget set` (SpendLimits semantics: the crossing call
+completes, the next is refused; exhausted budget refuses the pulse).
+Delegate across agents with frozen briefs (`delegate --to`, see
+DELEGATION.md). Route every step with `policy` (prohibited blocks in code;
+spend → M, human/irreversible → H, else A). Repo config lives in
+`.atask/atask.yaml` (caps, extra prohibited patterns).
+
+| File | Role |
+|---|---|
+| `budget.py` | Durable spend brake (`budgets.json`, env advertise) |
+| `agents/` | Default delegation lanes (analyst/coder/architect, Cursor-style frontmatter) |
+| `DELEGATION.md` | Triage doctrine: cheapest-capable first, Kanban not function calls |
 
 ## Files
 

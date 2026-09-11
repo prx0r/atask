@@ -415,6 +415,176 @@ def run_validator(tid: str, root: Path) -> list[str]:
     return [f"validator: {x}"[:160] for x in reasons[:8]]
 
 
+# ------------------------------------------------------------------
+# Delegation: Kanban, not function calls. Work crosses agents as child
+# tasks with a FROZEN brief (written to briefs/, sha-pinned on the record),
+# so delegation survives restarts and the judge (stoplight + validator)
+# grades the delegate's log exactly like the parent's. Mid-task brief edits
+# void the assignment: new sha, new task.
+
+
+def parse_frontmatter(path: Path) -> dict:
+    """Tiny --- parser: name/description/model/readonly only. No YAML dep."""
+    meta: dict = {}
+    try:
+        text = Path(path).read_text()
+    except Exception:
+        return meta
+    if not text.startswith("---"):
+        return meta
+    head = text[3:].split("---", 1)[0]
+    for line in head.splitlines():
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if k in ("name", "description", "model"):
+            meta[k] = v
+        elif k == "readonly":
+            meta[k] = v.lower() in ("true", "yes", "1")
+    return meta
+
+
+def agents_list(root: Path) -> list[dict]:
+    root = Path(root)
+    out = []
+    for p in sorted((root / "agents").glob("*.md")):
+        meta = parse_frontmatter(p)
+        if meta.get("name"):
+            out.append({"name": meta["name"],
+                        "description": meta.get("description", "")[:200],
+                        "model": meta.get("model", "inherit"),
+                        "readonly": bool(meta.get("readonly", False)),
+                        "file": f"agents/{p.name}"})
+    return out
+
+
+def seed_agents(root: Path) -> int:
+    """Copy harness-default lanes into <root>/agents/ (never overwrite)."""
+    root = Path(root)
+    src = Path(__file__).resolve().parent / "agents"
+    dest = root / "agents"
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    if src.is_dir():
+        for p in sorted(src.glob("*.md")):
+            if not (dest / p.name).exists():
+                (dest / p.name).write_text(p.read_text())
+                n += 1
+    return n
+
+
+def delegate(root: Path, parent: str, tid: str, agent: str, brief: str,
+             summary: str = "", acceptance: list[str] | None = None,
+             covers_goal: list[int] | None = None) -> tuple[bool, str]:
+    """Spawn a child task assigned to a registered agent lane with a frozen
+    brief. The brief file is content-hashed; the sha pins the assignment."""
+    import hashlib as _h
+    root = Path(root)
+    lanes = {a["name"]: a for a in agents_list(root)}
+    if agent not in lanes:
+        return False, f"unknown agent lane: {agent} (see: agents command)"
+    ok, msg = spawn(root, parent, tid,
+                    summary or f"delegated to {agent}: {brief[:60]}",
+                    acceptance or [brief[:120]], covers_goal)
+    if not ok:
+        return False, msg
+    bdir = root / "briefs"
+    bdir.mkdir(parents=True, exist_ok=True)
+    bp = bdir / f"{tid}.{agent}.md"
+    bp.write_text(f"# Brief for {tid} (lane: {agent})\n\n{brief}\n")
+    sha = _h.sha256(bp.read_bytes()).hexdigest()[:16]
+    q = root / "tasks.jsonl"
+    recs = load(q)
+    for r in recs:
+        if r.get("id") == tid:
+            r["delegate"] = {"agent": agent, "model": lanes[agent]["model"],
+                             "brief_ref": f"briefs/{bp.name}", "brief_sha": sha}
+            break
+    save_all(recs, q)
+    alog(parent, "delegate", [], root,
+         f"{tid} -> {agent} (brief sha {sha})")
+    return True, f"delegated {tid} to {agent} (brief sha {sha})"
+
+
+# ------------------------------------------------------------------
+# Policy: tier-route every step, prohibit in code. atask.yaml (minimal
+# key: value + list syntax, # comments) overrides caps and extends lists.
+
+
+BASE_PROHIBITED = [
+    (r"\.env(\s|$)", "real .env into git/history"),
+    (r"(?i)\b(api[_-]?key|secret|mnemonic|private_key)\b\s*[:=]\s*\S{8,}", "secret literal"),
+    (r"git\s+push\s+.*--force", "force-push / history rewrite"),
+    (r"rm\s+-rf\s+(/|~)(\s|$)", "recursive delete at fs root/home"),
+    (r"(?i)gpt-oss-120b|balance.*drawdown|enable usage from balance", "forbidden spend"),
+]
+
+SPEND_HINTS = ["quota", "spend", "$", "cents", "invoice", "paid api", "per-seat"]
+HUMAN_HINTS = ["approve", "credential", "password", "human", "decide",
+               "external", "irreversible", "send", "publish", "merge"]
+
+
+def load_config(root: Path) -> dict:
+    """Minimal atask.yaml parser: `key: value`, lists as `key:` + `  - item`."""
+    root = Path(root)
+    cfg: dict = {"prohibited": [], "spend_hints": [], "human_hints": []}
+    p = root / "atask.yaml"
+    if not p.exists():
+        return cfg
+    cur = None
+    for raw in p.read_text().splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if line[:1] not in (" ", "\t") and ":" in line:
+            k, v = line.split(":", 1)
+            k, v = k.strip(), v.strip()
+            if v:
+                try:
+                    cfg[k] = float(v) if "." in v else int(v)
+                except ValueError:
+                    cfg[k] = v
+                cur = None
+            else:
+                cfg.setdefault(k, [])
+                cur = k
+        elif cur and line.strip().startswith("-"):
+            item = line.strip()[1:].strip().strip("'\"")
+            if isinstance(cfg.get(cur), list):
+                cfg[cur].append(item)
+    return cfg
+
+
+def policy_check(root: Path, action: str) -> dict:
+    """CLEAR|PROHIBITED + route A|H|M. Prohibitions are code, not advice."""
+    import re as _re
+    root = Path(root)
+    cfg = load_config(root)
+    patterns = list(BASE_PROHIBITED) + [(p, "repo-prohibited") for p in cfg.get("prohibited", [])]
+    for pat, reason in patterns:
+        try:
+            if _re.search(pat, action or ""):
+                return {"verdict": "PROHIBITED", "route": "P",
+                        "reason": reason, "action": (action or "")[:120]}
+        except Exception:
+            continue
+    spend = list(SPEND_HINTS) + list(cfg.get("spend_hints", []))
+    human = list(HUMAN_HINTS) + list(cfg.get("human_hints", []))
+    low = (action or "").lower()
+    if any(h in low for h in spend):
+        return {"verdict": "CLEAR", "route": "M",
+                "reason": "spend/quota involved: needs budget + receipt",
+                "action": (action or "")[:120]}
+    if any(h in low for h in human):
+        return {"verdict": "CLEAR", "route": "H",
+                "reason": "human judgment/irreversible/external: escalate",
+                "action": (action or "")[:120]}
+    return {"verdict": "CLEAR", "route": "A",
+            "reason": "free + reversible: execute",
+            "action": (action or "")[:120]}
+
+
 def verify(root: Path) -> list[str]:
     """Read-only queue audit. Empty = clean."""
     root = Path(root)
@@ -486,6 +656,8 @@ def main(argv: list[str] | None = None) -> int:
     p_log.add_argument("--covers", default="")
     p_log.add_argument("--detail", default="")
     p_log.add_argument("--evidence", default="")
+    p_log.add_argument("--cost", default=None)
+    p_log.add_argument("--tokens", default=None)
     p_sl = _dir(sub.add_parser("stoplight"))
     p_sl.add_argument("--id", required=True)
     p_done = _dir(sub.add_parser("done"))
@@ -516,20 +688,44 @@ def main(argv: list[str] | None = None) -> int:
     p_ans.add_argument("--hid", required=True)
     p_ans.add_argument("--answer", default="")
     _dir(sub.add_parser("hlist"))
+    p_bud = _dir(sub.add_parser("budget"))
+    p_bud.add_argument("op", choices=("set", "show", "record", "check"))
+    p_bud.add_argument("--usd", default=None)
+    p_bud.add_argument("--tokens", default=None)
+    p_bud.add_argument("--label", default="")
+    _dir(sub.add_parser("agents"))
+    p_del = _dir(sub.add_parser("delegate"))
+    p_del.add_argument("--parent", required=True)
+    p_del.add_argument("--id", required=True)
+    p_del.add_argument("--to", required=True)
+    p_del.add_argument("--brief", required=True)
+    p_del.add_argument("--summary", default="")
+    p_del.add_argument("--accept", action="append", default=[])
+    p_del.add_argument("--covers-goal", default="")
+    p_pol = _dir(sub.add_parser("policy"))
+    p_pol.add_argument("--action", required=True)
 
     a = ap.parse_args(argv)
     root = Path(getattr(a, "dir", DEFAULT_DIR))
 
     if a.cmd == "init":
         root.mkdir(parents=True, exist_ok=True)
-        for sub_d in ("a-logs", "reports", "runs", "validators"):
+        for sub_d in ("a-logs", "reports", "runs", "validators", "agents", "briefs"):
             (root / sub_d).mkdir(exist_ok=True)
         q = root / "tasks.jsonl"
         if not q.exists():
             q.write_text("")
         if not (root / "h-tasks.jsonl").exists():
             (root / "h-tasks.jsonl").write_text("")
+        n_agents = seed_agents(root)
+        cfg_p = root / "atask.yaml"
+        if not cfg_p.exists():
+            cfg_p.write_text(
+                "# atask config: caps are brakes, not accounting.\n"
+                "# budget_usd: 5.0\n# budget_tokens: 200000\n"
+                "# prohibited:\n#   - 'my-secret-pattern'\n")
         print(json.dumps({"init": True, "dir": str(root),
+                          "seeded_agents": n_agents,
                           "close": f"harness ready at {root}. add tasks, drain ready."}))
         return 0
 
@@ -562,7 +758,26 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "log":
         covers = [int(c) for c in a.covers.split(",") if c.strip().isdigit()]
         e = alog(a.id, a.action, covers, root, a.detail, a.evidence)
-        print(json.dumps({"logged": True, "covers": e["covers"]}))
+        out = {"logged": True, "covers": e["covers"]}
+        if a.cost is not None or a.tokens is not None:
+            from budget import BudgetExceeded, FileBudget
+            b = FileBudget(root)
+            try:
+                cost = float(a.cost) if a.cost is not None else None
+            except ValueError:
+                print("unparseable --cost (must be a number)")
+                return 1
+            try:
+                toks = int(float(a.tokens)) if a.tokens is not None else 0
+            except ValueError:
+                print("unparseable --tokens (must be a number)")
+                return 1
+            try:
+                b.record(tokens=toks, cost=cost, label=a.id)
+            except BudgetExceeded as ex:
+                out["budget_warning"] = str(ex)[:160]
+            out["budget"] = b.snapshot(a.id)
+        print(json.dumps(out))
         return 0
 
     if a.cmd == "stoplight":
@@ -641,6 +856,63 @@ def main(argv: list[str] | None = None) -> int:
         for h in open_h(root):
             print(f"{h['id']} task={h.get('task')} need={h.get('need','')[:80]}")
         return 0
+
+    if a.cmd == "budget":
+        from budget import BudgetExceeded, FileBudget
+        b = FileBudget(root)
+        if a.op == "set":
+            try:
+                usd = float(a.usd) if a.usd is not None else None
+                toks = int(float(a.tokens)) if a.tokens is not None else None
+            except ValueError:
+                print("unparseable --usd/--tokens (must be numbers)")
+                return 1
+            b.set_caps(usd, toks)
+            print(json.dumps({"caps": b.snapshot()}))
+            return 0
+        if a.op == "show":
+            print(json.dumps(b.snapshot(), indent=1))
+            return 0
+        if a.op == "record":
+            try:
+                usd = float(a.usd) if a.usd is not None else None
+                toks = int(float(a.tokens)) if a.tokens is not None else 0
+            except ValueError:
+                print("unparseable --usd/--tokens (must be numbers)")
+                return 1
+            try:
+                b.record(tokens=toks, cost=usd, label=a.label)
+            except BudgetExceeded as ex:
+                print(str(ex)[:200])
+                return 1
+            print(json.dumps(b.snapshot(a.label)))
+            return 0
+        try:
+            b.check(a.label or "budget check")
+        except BudgetExceeded as ex:
+            print(str(ex)[:200])
+            return 1
+        print(json.dumps({"exhausted": False, **b.snapshot(a.label)}))
+        return 0
+
+    if a.cmd == "agents":
+        for ag in agents_list(root):
+            print(f"{ag['name']} [{ag['model']}]"
+                  f"{' readonly' if ag['readonly'] else ''}: "
+                  f"{ag['description'][:100]}")
+        return 0
+
+    if a.cmd == "delegate":
+        cg = [int(c) for c in a.covers_goal.split(",") if c.strip().isdigit()]
+        ok, msg = delegate(root, a.parent, a.id, a.to, a.brief,
+                           a.summary, a.accept, cg or None)
+        print(msg)
+        return 0 if ok else 1
+
+    if a.cmd == "policy":
+        rep = policy_check(root, a.action)
+        print(json.dumps(rep, indent=1)[:1000])
+        return 0 if rep["verdict"] == "CLEAR" else 1
     return 2
 
 

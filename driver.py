@@ -25,7 +25,19 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from atask import goal_check, load, open_h, ready, set_status, stoplight
+from atask import goal_check, load, load_config, open_h, ready, set_status, stoplight
+from budget import BudgetExceeded, FileBudget
+
+
+def budget_state(root: Path) -> dict:
+    """Live budget: budgets.json wins; atask.yaml caps seed it when unset."""
+    b = FileBudget(root)
+    cfg = load_config(root)
+    if b.max_usd is None and isinstance(cfg.get("budget_usd"), (int, float)):
+        b.set_caps(float(cfg["budget_usd"]), b.max_tokens)
+    if b.max_tokens is None and isinstance(cfg.get("budget_tokens"), (int, float)):
+        b.set_caps(b.max_usd, int(cfg["budget_tokens"]))
+    return {"snapshot": b.snapshot(), "advertise": b.advertise()}
 
 
 def zoom(root: Path) -> dict:
@@ -52,6 +64,13 @@ def pulse(root: Path) -> dict:
     except Exception as e:
         return {"error": f"queue unreadable: {e}"[:160],
                 "halt_legal": False, "elapsed_s": 0.0}
+    try:
+        FileBudget(root).check("pulse")
+    except BudgetExceeded as ex:
+        return {"error": str(ex)[:200], "halt_legal": False,
+                "budget": budget_state(root)["snapshot"],
+                "elapsed_s": round(time.monotonic() - t0, 3),
+                "close": "refused: budget exhausted — top up or revoke caps"}
     promoted, nogos = [], {}
     for r in recs:
         if r.get("status") != "REPORTED":
@@ -85,6 +104,7 @@ def pulse(root: Path) -> dict:
     return {"promoted": promoted, "nogo": nogos, "orders": orders,
             "halt_legal": halt_legal,
             "open_h": [h["id"] for h in oh],
+            "budget": budget_state(root),
             "goal": ({k: gc[k] for k in ("goal_done", "items") if k in gc}
                      if gc.get("goal") else {"goal": False}),
             "elapsed_s": round(time.monotonic() - t0, 3),
@@ -98,12 +118,14 @@ def boot(root: Path) -> dict:
     created = False
     if not (root / "tasks.jsonl").exists():
         root.mkdir(parents=True, exist_ok=True)
-        for sub in ("a-logs", "reports", "runs", "validators"):
+        for sub in ("a-logs", "reports", "runs", "validators", "agents", "briefs"):
             (root / sub).mkdir(exist_ok=True)
         (root / "tasks.jsonl").write_text("")
         if not (root / "h-tasks.jsonl").exists():
             (root / "h-tasks.jsonl").write_text("")
         created = True
+    from atask import seed_agents
+    seeded = seed_agents(root)
     z = zoom(root)
     if z["open_h"]:
         nxt = f"answer {z['open_h']} open human tasks first"
@@ -114,6 +136,7 @@ def boot(root: Path) -> dict:
     else:
         nxt = "halt-legal: propose next tasks with justification"
     return {"booted": True, "created": created, "zoom": z, "next": nxt,
+            "seeded_agents": seeded,
             "close": (f"runtime up. achieved {z['done']} / missing {z['missing']}. "
                       f"next: {nxt}")}
 
