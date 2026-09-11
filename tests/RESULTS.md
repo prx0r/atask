@@ -1,5 +1,18 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — contention proof (session goal DONE, 91/91)
+- Cross-process transactions: `transact()` wraps load→mutate→write-back
+  under one re-entrant flock; readers covered too. `set_status`/`add`/
+  `spawn` migrated; h/m paths keep self-locking saves (documented).
+- TestContend: 4 threads × (10 adds + 20 flips + 10 a-logs) on one
+  queue → 40/40 ids, zero loss, acheck clean, 3/3 isolation runs.
+- The proof earned its keep: first run FAILED on a real torn read
+  (reader caught a write at a line boundary, silently missing an id).
+  flock verified serializing first, so the fault was uncovered reads —
+  fixed by covering readers + re-entrant depth guard (no self-deadlock).
+- a-cron/a-contend/a-tag all DONE via pulse; v0.1.0 tag + branch rule
+  (AGENTS release section) next: tag pushed after suite.
+
 ## 2026-09-11 — working h-task live (session `live1` + `liveproof`)
 - Phase 1 of the attack plan DONE: live human loop over digits in a
   scratch queue — 2 attempts + red probes → escalate (op+alts) →

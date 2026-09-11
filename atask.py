@@ -61,6 +61,39 @@ def d(p: str | Path, *parts: str) -> Path:
     return Path(p, *parts)
 
 
+from contextlib import contextmanager as _cm
+import threading as _th
+
+_local = _th.local()
+
+
+@_cm
+def _locked(path: Path):
+    """Cross-process exclusive lock (fcntl.flock, stdlib, Unix) +
+    same-thread re-entrant (nested transact/load never self-deadlocks).
+    Makes read-modify-write cycles AND plain reads safe: without covered
+    reads, a reader can catch a torn write at a line boundary and
+    silently miss records."""
+    import fcntl as _fc
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    depth = getattr(_local, "depth", 0)
+    _local.depth = depth + 1
+    lf = open(str(path) + ".lock", "w")
+    try:
+        if depth == 0:
+            _fc.flock(lf.fileno(), _fc.LOCK_EX)
+        yield
+    finally:
+        if depth == 0:
+            try:
+                _fc.flock(lf.fileno(), _fc.LOCK_UN)
+            except Exception:
+                pass
+        lf.close()
+        _local.depth = depth
+
+
 def _opt_int(v) -> int | None:
     if v is None:
         return None
@@ -87,19 +120,42 @@ def _int_list(vals) -> list[int]:
 
 def load(queue: Path) -> list[dict]:
     queue = Path(queue)
-    if not queue.exists():
-        return []
-    out = []
-    for line in queue.read_text().splitlines():
-        if line.strip():
-            out.append(json.loads(line))
+    with _locked(queue):
+        if not queue.exists():
+            return []
+        out = []
+        for line in queue.read_text().splitlines():
+            if line.strip():
+                out.append(json.loads(line))
     return out
+
+
+def _write_all(recs: list[dict], queue: Path) -> None:
+    queue = Path(queue)
+    queue.parent.mkdir(parents=True, exist_ok=True)
+    queue.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
 
 
 def save_all(recs: list[dict], queue: Path) -> None:
     queue = Path(queue)
-    queue.parent.mkdir(parents=True, exist_ok=True)
-    queue.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+    with _locked(queue):
+        _write_all(recs, queue)
+
+
+def transact(root: str | Path, fn) -> object:
+    """One cross-process transaction: load queue+h/m under a single
+    exclusive lock, mutate in place, write back. All state transitions
+    funnel through here — concurrent workers cannot lose updates."""
+    root = Path(root)
+    with _locked(root / "tasks.jsonl"):
+        recs = load(root / "tasks.jsonl")
+        hs = hload(root)
+        ms = mload(root)
+        out = fn(recs, hs, ms)
+        _write_all(recs, root / "tasks.jsonl")
+        _write_h(hs, root)
+        _write_m(ms, root)
+    return out
 
 
 def ready(recs: list[dict]) -> list[dict]:
@@ -253,43 +309,54 @@ def set_status(tid: str, status: str, root: Path, **fields) -> tuple[bool, str]:
     root = Path(root)
     if status not in STATUS:
         return False, f"bad status {status!r}"
-    q = root / "tasks.jsonl"
-    recs = load(q)
-    by_id = {r.get("id"): r for r in recs}
-    if tid not in by_id:
-        return False, "unknown task id"
-    rec = by_id[tid]
-    for b in (rec.get("blocked_by") or []):
-        if b not in by_id:
-            return False, f"dangling blocked_by {b!r}"
-    rec.update({k: v for k, v in fields.items() if v is not None})
-    if status == "DONE":
-        # The gate runs on saved state (stoplight reads the queue file);
-        # on refusal the previous record is restored, never left dirty.
-        prev_rec = dict(by_id[tid])
+
+    def _go(recs: list[dict], hs: list[dict], ms: list[dict]):
+        by_id = {r.get("id"): r for r in recs}
+        if tid not in by_id:
+            return (False, "unknown task id", "", 0)
+        rec = by_id[tid]
+        for b in (rec.get("blocked_by") or []):
+            if b not in by_id:
+                return (False, f"dangling blocked_by {b!r}", "", 0)
+        rec.update({k: v for k, v in fields.items() if v is not None})
+        if status == "DONE":
+            # Gate runs on saved state (stoplight reads the queue file);
+            # on refusal the previous record is restored, never dirty.
+            prev_rec = dict(rec)
+            rec["status"] = status
+            _write_all(recs, root / "tasks.jsonl")
+            errs = done_gate(rec, root)
+            sl = stoplight(tid, root)
+            if not sl["go"]:
+                errs += [f"stoplight: {m}"[:160] for m in sl["missing"][:6]]
+            if errs:
+                rec.clear()
+                rec.update(prev_rec)  # in-place: recs list shares the object
+                _write_all(recs, root / "tasks.jsonl")
+                return (False, "transition rejected: " + "; ".join(errs),
+                        prev_rec.get("status", ""), int(rec.get("attempts", 0)))
+            return (True, f"{tid} -> {status}",
+                    prev_rec.get("status", ""), int(rec.get("attempts", 0)))
+        prev = rec.get("status", "")
+        if status == "EXECUTING" and prev != "EXECUTING":
+            rec["attempts"] = int(rec.get("attempts", 0)) + 1
         rec["status"] = status
-        save_all(recs, q)
-        errs = done_gate(rec, root)
-        sl = stoplight(tid, root)
-        if not sl["go"]:
-            errs += [f"stoplight: {m}"[:160] for m in sl["missing"][:6]]
-        if errs:
-            by_id[tid].clear()
-            by_id[tid].update(prev_rec)  # in-place: recs list shares the object
-            save_all(recs, q)
-            return False, "transition rejected: " + "; ".join(errs)
+        return (True, f"{tid} -> {status}",
+                prev, int(rec.get("attempts", 0)))
+
+    out = transact(root, _go)
+    ok, msg, prev, attempts = out[0], out[1], out[2], out[3]
+    if not ok:
+        return False, msg
+    if status == "DONE":
         _emit(root, "run.finished", task_id=tid, outcome="validated",
-              attempts=int(rec.get("attempts", 0)))
-        return True, f"{tid} -> {status}"
-    prev = rec.get("status", "")
+              attempts=attempts)
+        return True, msg
     if status == "EXECUTING" and prev != "EXECUTING":
-        rec["attempts"] = int(rec.get("attempts", 0)) + 1
-        _emit(root, "run.started", task_id=tid, attempt=rec["attempts"])
-    rec["status"] = status
-    save_all(recs, q)
+        _emit(root, "run.started", task_id=tid, attempt=attempts)
     _emit(root, "task.status", task_id=tid, **{"from": prev, "to": status},
-          attempts=int(rec.get("attempts", 0)))
-    return True, f"{tid} -> {status}"
+          attempts=attempts)
+    return True, msg
 
 
 # ------------------------------------------------------------------
@@ -366,38 +433,51 @@ def goal_check(root: Path) -> dict:
 MAX_DEPTH = 8
 
 
+def create_task(root: Path, rec: dict) -> tuple[bool, str]:
+    """Insert one task record transactionally (duplicate ids refused)."""
+    root = Path(root)
+
+    def _go(recs: list[dict], hs: list[dict], ms: list[dict]):
+        if any(r.get("id") == rec.get("id") for r in recs):
+            return (False, f"duplicate id: {rec.get('id')}")
+        recs.append(rec)
+        return (True, rec.get("id", ""))
+    return transact(root, _go)[:2]
+
+
 def spawn(root: Path, parent: str, tid: str, summary: str,
           acceptance: list[str], covers_goal: list[int] | None = None,
           evidence_required: list[dict] | None = None) -> tuple[bool, str]:
     root = Path(root)
-    q = root / "tasks.jsonl"
-    recs = load(q)
-    by_id = {r.get("id"): r for r in recs}
-    if any(r.get("id") == tid for r in recs):
-        return False, f"duplicate id: {tid}"
-    if parent not in by_id:
-        return False, f"unknown parent: {parent}"
-    par = by_id[parent]
-    if par.get("status") == "DONE":
-        return False, f"parent already DONE: {parent}"
-    depth = int(par.get("depth", 0)) + 1
-    if depth > MAX_DEPTH:
-        return False, f"refused: depth {depth} exceeds MAX_DEPTH {MAX_DEPTH}"
-    child = {"id": tid, "tier": "A", "summary": summary,
-             "acceptance": list(acceptance),
-             "evidence_required": list(evidence_required or []),
-             "blocked_by": list(par.get("blocked_by") or []),
-             "status": "PROPOSED", "report_ref": "", "validation_ref": "",
-             "parent": parent, "depth": depth,
-             "covers_goal": list(covers_goal) if covers_goal is not None
-             else list(par.get("covers_goal") or [])}
-    recs.append(child)
-    par.setdefault("blocked_by", [])
-    if tid not in par["blocked_by"]:
-        par["blocked_by"].append(tid)
-    par["depth"] = min(int(par.get("depth", 0)), depth - 1)
-    save_all(recs, q)
-    return True, f"spawned {tid} under {parent} (depth {depth})"
+
+    def _go(recs: list[dict], hs: list[dict], ms: list[dict]):
+        by_id = {r.get("id"): r for r in recs}
+        if any(r.get("id") == tid for r in recs):
+            return False, f"duplicate id: {tid}"
+        if parent not in by_id:
+            return False, f"unknown parent: {parent}"
+        par = by_id[parent]
+        if par.get("status") == "DONE":
+            return False, f"parent already DONE: {parent}"
+        depth = int(par.get("depth", 0)) + 1
+        if depth > MAX_DEPTH:
+            return False, f"refused: depth {depth} exceeds MAX_DEPTH {MAX_DEPTH}"
+        child = {"id": tid, "tier": "A", "summary": summary,
+                 "acceptance": list(acceptance),
+                 "evidence_required": list(evidence_required or []),
+                 "blocked_by": list(par.get("blocked_by") or []),
+                 "status": "PROPOSED", "report_ref": "", "validation_ref": "",
+                 "parent": parent, "depth": depth,
+                 "covers_goal": list(covers_goal) if covers_goal is not None
+                 else list(par.get("covers_goal") or [])}
+        recs.append(child)
+        par.setdefault("blocked_by", [])
+        if tid not in par["blocked_by"]:
+            par["blocked_by"].append(tid)
+        par["depth"] = min(int(par.get("depth", 0)), depth - 1)
+        return True, f"spawned {tid} under {parent} (depth {depth})"
+
+    return transact(root, _go)
 
 
 # ------------------------------------------------------------------
@@ -453,10 +533,16 @@ def hload(root: Path) -> list[dict]:
     return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
 
 
-def hsave(recs: list[dict], root: Path) -> None:
+def _write_h(recs: list[dict], root: Path) -> None:
     root = Path(root)
     (root / "h-tasks.jsonl").write_text(
         "".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+
+
+def hsave(recs: list[dict], root: Path) -> None:
+    root = Path(root)
+    with _locked(root / "h-tasks.jsonl"):
+        _write_h(recs, root)
 
 
 def open_h(root: Path) -> list[dict]:
@@ -591,10 +677,15 @@ def mload(root: Path) -> list[dict]:
     return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
 
 
-def msave(recs: list[dict], root: Path) -> None:
+def _write_m(recs: list[dict], root: Path) -> None:
     Path(root).mkdir(parents=True, exist_ok=True)
     (Path(root) / "m-tasks.jsonl").write_text(
         "".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+
+
+def msave(recs: list[dict], root: Path) -> None:
+    with _locked(Path(root) / "m-tasks.jsonl"):
+        _write_m(recs, root)
 
 
 def open_m(root: Path) -> list[dict]:
@@ -949,11 +1040,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if a.cmd == "add":
-        q = root / "tasks.jsonl"
-        recs = load(q)
-        if any(r.get("id") == a.id for r in recs):
-            print(f"duplicate id: {a.id}")
-            return 1
         reqs = []
         for e in a.evidence:
             if ":" in e:
@@ -975,10 +1061,12 @@ def main(argv: list[str] | None = None) -> int:
                "report_ref": "", "validation_ref": "",
                "depth": 0,
                "covers_goal": _int_list(a.covers_goal)}
-        recs.append(rec)
-        save_all(recs, q)
-        print(json.dumps({"added": a.id, "status": "PROPOSED"}))
-        return 0
+        ok, msg = create_task(root, rec)
+        if ok:
+            print(json.dumps({"added": a.id, "status": "PROPOSED"}))
+            return 0
+        print(msg)
+        return 1
 
     if a.cmd in ("justify", "execute", "report"):
         nxt = {"justify": "JUSTIFIED", "execute": "EXECUTING", "report": "REPORTED"}[a.cmd]

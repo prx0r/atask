@@ -1373,6 +1373,49 @@ class TestMinimalPass(unittest.TestCase):
         self.assertEqual(alog_read("a-u", root)[-1]["covers"], [0, 1])
 
 
+class TestContend(unittest.TestCase):
+    def test_two_workers_one_queue(self):
+        import threading as _th
+        root = fresh_root(self)
+        driver_boot(root)
+        errors: list = []
+
+        def worker(w):
+            try:
+                for i in range(10):
+                    tid = f"a-{w}-{i}"
+                    ok, msg = atask.create_task(root, {
+                        "id": tid, "tier": "A", "summary": f"{w} {i}",
+                        "acceptance": ["done"],
+                        "evidence_required": [{"kind": "command",
+                                               "spec": "echo ok"}],
+                        "blocked_by": [], "status": "PROPOSED",
+                        "report_ref": "", "validation_ref": "",
+                        "depth": 0, "covers_goal": []})
+                    assert ok, msg
+                    ok, msg = atask.set_status(tid, "JUSTIFIED", root)
+                    assert ok, msg
+                    ok, msg = atask.set_status(tid, "EXECUTING", root)
+                    assert ok, msg
+                    atask.alog(tid, "work", [0], root, f"{w} did {i}",
+                               "command:echo ok")
+            except Exception as e:  # noqa: BLE001 — collected, asserted below
+                errors.append(f"{w}: {e!r}")
+
+        threads = [_th.Thread(target=worker, args=(f"w{k}",)) for k in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        recs = atask.load(os.path.join(root, "tasks.jsonl"))
+        ids = {r["id"] for r in recs}
+        expect = {f"a-w{k}-{i}" for k in range(4) for i in range(10)}
+        self.assertEqual(ids, expect)  # nothing lost, nothing duped
+        self.assertTrue(all(r["status"] == "EXECUTING" for r in recs))
+        self.assertEqual(acheck_check(root), [])
+
+
 class TestPromotionProof(unittest.TestCase):
     def _tried(self, root, tid, red=True):
         add_task(root, tid)

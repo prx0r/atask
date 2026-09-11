@@ -39,3 +39,11 @@ Binding rules for any coding agent working with this harness.
 2. File the first task (`add` + `justify`), work the turn loop in ATASK.md.
 3. Cron the driver: `driver.py pulse` every 15 min for autonomy.
 4. CI runs `acheck.py` + the test suite. Both green or the change waits.
+
+## Release discipline (this repo)
+
+- `main` stays green: suite + acheck exit 0 on every commit, receipted
+  in `tests/logs/`, ledger entry in `tests/RESULTS.md`.
+- Releases are annotated tags (`v0.x.y`) pushed to origin. Tag only
+  from green main with the ledger current.
+- Experimental rewrites branch; merges require the same gates.
