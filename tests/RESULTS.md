@@ -1,5 +1,14 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — openai backend doc (session `openaidoc`, GOAL_DONE, 91/91)
+- Saved `docs/OPENAI.md`: 18 sections, verdict = backend-not-replacement.
+  Key splits kept: interruption=mechanism vs m-task=semantics;
+  tracing=observability vs receipt=evidence; capability vs grant vs
+  budget vs policy as four distinct words.
+- Kernel impact: none required. `run usage` + events already carry what
+  an acom-openai adapter would fill; documented the one future touch
+  point (usage-snapshot importer, same pattern as meters/opencode_db).
+
 ## 2026-09-11 — contention proof (session goal DONE, 91/91)
 - Cross-process transactions: `transact()` wraps load→mutate→write-back
   under one re-entrant flock; readers covered too. `set_status`/`add`/
