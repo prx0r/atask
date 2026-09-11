@@ -71,6 +71,46 @@ def message_usage(session_id: str, since_min: float = 0,
     return tot
 
 
+def message_usage_since(session_id: str, state_path: str | Path,
+                        path: str = DEFAULT_DB) -> dict:
+    """Incremental attribution (stolen from opencode's own event logic):
+    read only message rows newer than the stored checkpoint, then advance
+    it. Per-call cost is O(new rows), never O(session history)."""
+    state_path = Path(state_path)
+    try:
+        ckpt = json.loads(state_path.read_text())
+    except Exception:
+        ckpt = {}
+    last = int(ckpt.get(session_id, 0))
+    db = _db(path)
+    rows = db.execute("select time_created, data from message where session_id=?"
+                      " and time_created>? order by time_created",
+                      (session_id, last)).fetchall()
+    tot = {"messages": 0, "in": 0, "out": 0, "reasoning": 0, "cost": 0.0,
+           "rows_scanned": len(rows)}
+    newest = last
+    for ts, blob in rows:
+        newest = max(newest, int(ts or 0))
+        try:
+            m = json.loads(blob)
+        except Exception:
+            continue
+        if m.get("role") != "assistant":
+            continue
+        t = m.get("tokens", {}) or {}
+        tot["messages"] += 1
+        tot["in"] += int(t.get("input", 0))
+        tot["out"] += int(t.get("output", 0))
+        tot["reasoning"] += int(t.get("reasoning", 0))
+        tot["cost"] = round(tot["cost"] + float(m.get("cost", 0) or 0), 6)
+    ckpt[session_id] = newest
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(ckpt, sort_keys=True))
+    tot["token_source"] = "provider"
+    tot["checkpoint_ms"] = newest
+    return tot
+
+
 def calibration(session_id: str, path: str = DEFAULT_DB) -> dict:
     """chars/4 estimate over stored message text vs actual token counts."""
     db = _db(path)
@@ -103,11 +143,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("messages")
     p.add_argument("session_id")
     p.add_argument("--since", type=float, default=0)
+    p = sub.add_parser("since")
+    p.add_argument("session_id")
+    p.add_argument("--state", required=True)
     p = sub.add_parser("calibration")
     p.add_argument("session_id")
     a = ap.parse_args(argv)
     if a.cmd == "session":
         print(json.dumps(session_totals(a.session_id, a.db), indent=1)[:3000])
+    elif a.cmd == "since":
+        print(json.dumps(message_usage_since(a.session_id, a.state, a.db),
+                         indent=1)[:2000])
     elif a.cmd == "messages":
         print(json.dumps(message_usage(a.session_id, a.since, a.db), indent=1)[:3000])
     else:

@@ -1,5 +1,17 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — quiet + incremental session (GOAL_DONE, 71/71)
+- `--quiet/-q` on all three CLIs: close-lines only, JSON stays in files.
+  Adopted in my own runs above (one-liners vs blobs). Default output
+  unchanged (tests parse JSON).
+- Stolen from opencode's own logic: event-driven incremental reads.
+  `meters since --state` checkpoints last message row; second read scans
+  new rows only (3→1 in fixture test). Per-call O(new), never O(history).
+- Steal summary: (1) session store as source of truth, (2) update on
+  events not polls, (3) one summary file per session, (4) quiet terminal
+  by default. All four now mirrored.
+- Verdicts held: estimation 0.02x on stored text stands as FAIL.
+
 ## 2026-09-11 — token telemetry goal (session `tokens1`, GOAL_DONE)
 - 7 tasks (research, alts, 5 verdicts) worked strictly: run-tracked,
   a-logged, receipted, pulsed to DONE. Suite **69/69**.

@@ -1222,5 +1222,71 @@ class TestMinimalPass(unittest.TestCase):
         self.assertTrue(rep["halt_legal"])
 
 
+class TestQuiet(unittest.TestCase):
+    def test_quiet_prints_close_lines_only(self):
+        import io as _io
+        from contextlib import redirect_stdout as _ro
+        root = fresh_root(self)
+        driver_boot(root)
+        buf = _io.StringIO()
+        with _ro(buf):
+            rc = atask.main(["--quiet", "goal", "set", "--dir", root,
+                             "--statement", "s", "--accept", "x"])
+        self.assertEqual(rc, 0)
+        add_task(root, "a-q")
+        buf = _io.StringIO()
+        with _ro(buf):
+            rc = atask.main(["run", "start", "--quiet", "--dir", root,
+                             "--id", "a-q"])
+        self.assertEqual(rc, 0)
+        rid = buf.getvalue().strip()
+        self.assertRegex(rid, r"^r-[0-9a-f]+$")  # id only, no JSON blob
+        buf = _io.StringIO()
+        with _ro(buf):
+            rc = atask.main(["run", "finish", "-q", "--dir", root,
+                             "--run", rid, "--result", "completed"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("input_tokens", buf.getvalue())
+        buf = _io.StringIO()
+        with _ro(buf):
+            from driver import main as driver_main
+            rc = driver_main(["pulse", "-q", "--dir", root])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("{", buf.getvalue())
+
+
+class TestIncremental(unittest.TestCase):
+    def test_second_read_scans_only_new_rows(self):
+        import sqlite3
+        import tempfile
+        import shutil
+        from meters.opencode_db import message_usage_since
+        tmp = tempfile.mkdtemp(prefix="meters-inc-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        dbp = os.path.join(tmp, "t.db")
+        state = os.path.join(tmp, "ckpt.json")
+        db = sqlite3.connect(dbp)
+        db.execute("create table message (id text, session_id text,"
+                   " time_created int, time_updated int, data text)")
+        import json as _j
+        mk = lambda i, n: (_j.dumps({"role": "assistant", "cost": 0.01,
+                                     "tokens": {"input": n, "output": 1}}))
+        for i in range(1, 4):
+            db.execute("insert into message values (?,?,?,?,?)",
+                       (f"m{i}", "s", i * 1000, i * 1000, mk(i, 100)))
+        db.commit()
+        first = message_usage_since("s", state, dbp)
+        self.assertEqual(first["messages"], 3)
+        self.assertEqual(first["rows_scanned"], 3)
+        db.execute("insert into message values (?,?,?,?,?)",
+                   ("m4", "s", 4000, 4000, mk(4, 100)))
+        db.commit()
+        db.close()
+        second = message_usage_since("s", state, dbp)
+        self.assertEqual(second["messages"], 1)  # only the new row
+        self.assertEqual(second["rows_scanned"], 1)
+        self.assertEqual(second["in"], 100)
+
+
 if __name__ == "__main__":
     unittest.main()

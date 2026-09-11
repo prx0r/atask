@@ -577,10 +577,14 @@ def verify(root: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="atask.py")
     ap.add_argument("--dir", default=DEFAULT_DIR)
+    ap.add_argument("--quiet", "-q", action="store_true",
+                    help="one-line closes; full JSON stays in state files")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def _dir(p):
         p.add_argument("--dir", default=argparse.SUPPRESS)
+        p.add_argument("--quiet", "-q", action="store_true",
+                       default=argparse.SUPPRESS)
         return p
 
     _dir(sub.add_parser("init"))
@@ -672,6 +676,7 @@ def main(argv: list[str] | None = None) -> int:
 
     a = ap.parse_args(argv)
     root = Path(getattr(a, "dir", DEFAULT_DIR))
+    Q = bool(getattr(a, "quiet", False))
 
     if a.cmd == "init":
         root.mkdir(parents=True, exist_ok=True)
@@ -862,6 +867,9 @@ def main(argv: list[str] | None = None) -> int:
             _runs.save_open(run, root)
             _emit(root, "run.started", task_id=a.id, run_id=run.run_id,
                   attempt=run.attempt, worker=a.worker, model=a.model)
+            if Q:
+                print(run.run_id)
+                return 0
             print(json.dumps({"run_id": run.run_id, "task_id": a.id,
                               "attempt": run.attempt,
                               "env": {"ALOOP_RUN_ID": run.run_id,
@@ -933,6 +941,10 @@ def main(argv: list[str] | None = None) -> int:
                     cost=run.reported_cost_usd, label=run.run_id)
             except BudgetExceeded as ex:
                 out["budget_warning"] = str(ex)[:160]
+            if Q:
+                print(f"{run.run_id} usage in={run.input_tokens} "
+                      f"out={run.output_tokens} src={run.token_source}")
+                return 0
             print(json.dumps(out, indent=1)[:2000])
             return 0
         try:
@@ -944,6 +956,9 @@ def main(argv: list[str] | None = None) -> int:
         _emit(root, "run.finished", task_id=run.task_id, run_id=run.run_id,
               outcome=a.result, elapsed_ms=snap["elapsed_ms"],
               cost_usd=run.reported_cost_usd, validator=a.validator)
+        if Q:
+            print(f"{run.run_id} {a.result} {snap['elapsed_ms']}ms")
+            return 0
         print(json.dumps(snap, indent=1)[:2000])
         return 0
 

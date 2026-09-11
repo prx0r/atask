@@ -285,16 +285,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dir", default=".atask")
     ap.add_argument("--session", default=None)
     ap.add_argument("--text", default="")
+    ap.add_argument("--quiet", "-q", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("press", "presses", "digest"):
         p = sub.add_parser(name)
         p.add_argument("--dir", default=_ap.SUPPRESS)
         p.add_argument("--session", default=_ap.SUPPRESS)
         p.add_argument("--text", default=_ap.SUPPRESS)
+        p.add_argument("--quiet", "-q", action="store_true",
+                       default=_ap.SUPPRESS)
     sub.choices["press"].add_argument("chain")
     a = ap.parse_args(argv)
     root = Path(getattr(a, "dir", ".atask"))
     session = getattr(a, "session", None)
+    Q = bool(getattr(a, "quiet", False))
     if a.cmd == "presses":
         rows = _press.read(root)
         if session:
@@ -306,7 +310,11 @@ def main(argv: list[str] | None = None) -> int:
         if not session:
             print("digest needs --session")
             return 1
-        print(json.dumps(digest(root, session), indent=1)[:2000])
+        out = digest(root, session)
+        if Q:
+            print(f"digest {session}: " + json.dumps(out["outcome"], sort_keys=True))
+            return 0
+        print(json.dumps(out, indent=1)[:2000])
         return 0
     payloads: dict = {}
     for part in (getattr(a, "text", "") or "").split(";"):
@@ -314,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
             k, v = part.split("=", 1)
             payloads[k.strip()] = v
     try:
-        print(json.dumps(run(a.chain, session, root, payloads), indent=1)[:4000])
+        rep = run(a.chain, session, root, payloads)
+        print(rep["close"] if Q else json.dumps(rep, indent=1)[:4000])
     except ValueError as e:
         print(json.dumps({"ok": False, "error": str(e)[:200]}))
         return 1

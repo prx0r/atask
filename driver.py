@@ -220,26 +220,35 @@ def boot(root: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="driver.py")
     ap.add_argument("--dir", default=".atask")
+    ap.add_argument("--quiet", "-q", action="store_true")
     ap.add_argument("--max", type=int, default=50)
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("pulse", "boot", "run"):
         p = sub.add_parser(name)
         p.add_argument("--dir", default=argparse.SUPPRESS)
+        p.add_argument("--quiet", "-q", action="store_true",
+                       default=argparse.SUPPRESS)
         p.add_argument("--max", type=int, default=50)
     a = ap.parse_args(argv)
     root = Path(getattr(a, "dir", ".atask"))
+    Q = bool(getattr(a, "quiet", False))
     if a.cmd == "boot":
-        print(json.dumps(boot(root), indent=1)[:2000])
+        rep = boot(root)
+        print(rep["close"] if Q else json.dumps(rep, indent=1)[:2000])
         return 0
     if a.cmd == "pulse":
-        print(json.dumps(pulse(root), indent=1)[:4000])
+        rep = pulse(root)
+        print(rep.get("close", rep.get("error", "")) if Q
+              else json.dumps(rep, indent=1)[:4000])
         return 0
     for _ in range(max(1, a.max)):
         rep = pulse(root)
         if rep.get("error") or rep.get("halt_legal"):
-            print(json.dumps(rep, indent=1)[:4000])
+            print(rep.get("close", rep.get("error", "")) if Q
+                  else json.dumps(rep, indent=1)[:4000])
             return 0
-    print(json.dumps(rep, indent=1)[:4000])
+    print(rep.get("close", rep.get("error", "")) if Q
+          else json.dumps(rep, indent=1)[:4000])
     return 0
 
 
