@@ -788,10 +788,10 @@ def main(argv: list[str] | None = None) -> int:
     p_log.add_argument("--evidence", default="")
     p_sl = _dir(sub.add_parser("stoplight"))
     p_sl.add_argument("--id", required=True)
-    p_done = _dir(sub.add_parser("done"))
-    p_done.add_argument("--id", required=True)
-    p_done.add_argument("--report", default=None)
-    p_done.add_argument("--receipt", default=None)
+    # NOTE: no `done` subcommand exists on purpose. The agent NEVER declares
+    # DONE — it files REPORTED with proof; only driver pulse (the machine)
+    # promotes, and only on green stoplight. An agent that could mark its
+    # own work done would hallucinate completion; this removes the button.
     p_list = _dir(sub.add_parser("list"))
     p_list.add_argument("--status", default=None)
     _dir(sub.add_parser("ready"))
@@ -947,12 +947,6 @@ def main(argv: list[str] | None = None) -> int:
         rep = stoplight(a.id, root)
         print(json.dumps(rep, indent=1)[:2000])
         return 0 if rep["go"] else 1
-
-    if a.cmd == "done":
-        ok, msg = set_status(a.id, "DONE", root,
-                             report_ref=a.report, validation_ref=a.receipt)
-        print(msg)
-        return 0 if ok else 1
 
     if a.cmd == "list":
         recs = load(root / "tasks.jsonl")

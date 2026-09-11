@@ -1,5 +1,17 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — no-agent-verification (session `noverify`, GOAL_DONE, 87/87)
+- `atask.py done` deleted: the agent has no DONE button. It files
+  REPORTED with proof; only driver pulse promotes, only on green.
+  `set_status(DONE)` stays for pulse internals (tested directly).
+- Doctrine embedded (AGENTS.md rule 0, ATASK.md header): agent never
+  declares pass/fail/done; words about status are worthless; every
+  turn ends with a deterministic print as its last line. Violation =
+  treat as hallucination.
+- Output of verification is deterministic print, ~100x more useful
+  than agent prose because it re-executes: exit codes, stoplight JSON,
+  pulse closes, receipt ids.
+
 ## 2026-09-11 — h-task lifecycle session (GOAL_DONE, 86/86)
 - New `TestHLife`: one session, full digit life — MORE (op+evidence+
   alternatives shown), ACCEPT, OK, NO, reconcile flips a dependent that

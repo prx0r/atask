@@ -1342,6 +1342,19 @@ class TestMinimalPass(unittest.TestCase):
         rep = driver_pulse(root)
         self.assertTrue(rep["halt_legal"])
 
+    def test_no_done_button(self):
+        # The agent cannot declare DONE: no CLI path exists. Only the
+        # machine promotes (pulse: REPORTED + green stoplight).
+        with self.assertRaises(SystemExit) as cm:
+            atask.main(["done", "--id", "a-x"])
+        self.assertEqual(cm.exception.code, 2)
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-n")
+        finish_task(root, "a-n")
+        rep = driver_pulse(root)
+        self.assertEqual(rep["promoted"], ["a-n"])
+
     def test_repeated_list_flags_union(self):
         root = fresh_root(self)
         driver_boot(root)

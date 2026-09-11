@@ -4,6 +4,15 @@ Binding rules for any coding agent working with this harness.
 
 ## Absolute rules
 
+0. **You never declare pass, fail, or done. The machine does.** You have
+   no DONE button (`atask.py done` does not exist): you file REPORTED
+   with proof and the driver promotes on green stoplight — or refuses.
+   Your words about status are worthless; only pasted machine verdicts
+   count. Every turn ends with a deterministic print (exit code,
+   stoplight JSON, pulse close) as its last line — never a sentence
+   claiming completion. A claim without a pasted verdict is a spec
+   violation, and the reader must treat it as hallucination.
+
 1. **Every run logs. No log, no claim.** State changes go through `atask.py`;
    evidence claims carry re-runnable `command:` specs; receipts land in
    `runs/` via `runs.py`. Cite ids, not adjectives.
