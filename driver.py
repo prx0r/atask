@@ -235,6 +235,10 @@ def next_five(root: Path) -> list[dict]:
                 out.append({"n": len(out) + 1, "action": "propose",
                             "id": f"goal[{x['index']}]",
                             "why": f"unmapped: {x['acceptance'][:80]}"})
+    if not out:
+        out.append({"n": 1, "action": "propose",
+                    "id": "new-goal",
+                    "why": "halt-legal: nothing ready, blocked, or unmapped"})
     return out[:5]
 
 
