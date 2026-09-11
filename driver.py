@@ -192,6 +192,52 @@ def pulse(root: Path) -> dict:
                       + (" — HALT-LEGAL" if halt_legal else ""))}
 
 
+def next_five(root: Path) -> list[dict]:
+    """Derive the 5 next actions from state (evidence, not prose).
+    Priority: unblock humans/money → fix NOGOs → drain READY →
+    cover unmapped goal acceptance → propose. Empty + halt-legal =
+    propose fresh work with justification."""
+    from atask import goal_check, open_m
+    root = Path(root)
+    recs = load(root / "tasks.jsonl")
+    out: list[dict] = []
+    for h in open_h(root)[:2]:
+        out.append({"n": len(out) + 1, "action": "answer",
+                    "id": h["id"], "task": h.get("task"),
+                    "why": f"open {h.get('kind')}: {(h.get('need') or '')[:80]}"})
+    for m in open_m(root)[:1]:
+        out.append({"n": len(out) + 1, "action": "mresolve",
+                    "id": m["id"], "task": m.get("parent"),
+                    "why": f"{m.get('resource')} {m.get('amount_cents')}c "
+                           f"gain={m.get('marginal_gain_pp')}pp"})
+    for r in recs:
+        if len(out) >= 5:
+            break
+        if r.get("status") != "REPORTED":
+            continue
+        sl = stoplight(r["id"], root)
+        if not sl["go"]:
+            out.append({"n": len(out) + 1, "action": "fix",
+                        "id": r["id"],
+                        "why": (sl["missing"][:1] or ["nogo"])[0][:100]})
+    for r in ready(recs):
+        if len(out) >= 5:
+            break
+        out.append({"n": len(out) + 1, "action": "drain",
+                    "id": r["id"],
+                    "why": (r.get("summary") or "")[:100]})
+    gc = goal_check(root)
+    if len(out) < 5 and gc.get("goal"):
+        for x in gc.get("items", []):
+            if len(out) >= 5:
+                break
+            if not x["mapped"]:
+                out.append({"n": len(out) + 1, "action": "propose",
+                            "id": f"goal[{x['index']}]",
+                            "why": f"unmapped: {x['acceptance'][:80]}"})
+    return out[:5]
+
+
 def boot(root: Path) -> dict:
     root = Path(root)
     created = False
@@ -223,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--quiet", "-q", action="store_true")
     ap.add_argument("--max", type=int, default=50)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("pulse", "boot", "run"):
+    for name in ("pulse", "boot", "run", "next"):
         p = sub.add_parser(name)
         p.add_argument("--dir", default=argparse.SUPPRESS)
         p.add_argument("--quiet", "-q", action="store_true",
@@ -232,6 +278,14 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     root = Path(getattr(a, "dir", ".atask"))
     Q = bool(getattr(a, "quiet", False))
+    if a.cmd == "next":
+        items = next_five(root)
+        if Q:
+            for it in items:
+                print(f"{it['n']}. [{it['action']}] {it['id']} — {it['why'][:100]}")
+            return 0
+        print(json.dumps({"next": items}, indent=1)[:3000])
+        return 0
     if a.cmd == "boot":
         rep = boot(root)
         print(rep["close"] if Q else json.dumps(rep, indent=1)[:2000])

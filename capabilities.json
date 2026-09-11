@@ -1,0 +1,38 @@
+{
+  "AUTHORIZATION": {
+    "default": "owner.decision",
+    "capabilities": ["owner.decision", "spend.approval", "publish.approval", "merge.approval", "irreversible.action"],
+    "substitutes": [],
+    "notes": "Policy-reserved to the owner. No machine substitute by definition."
+  },
+  "SECRET": {
+    "default": "credential.unknown-to-machine",
+    "capabilities": ["credential.unknown-to-machine", "vault.secret", "account.access"],
+    "substitutes": ["env.VAR (if present)", "vault lookup (if configured)"],
+    "notes": "If a substitute exists, the agent must try it first (class-C exhaustion)."
+  },
+  "PREFERENCE": {
+    "default": "owner.taste",
+    "capabilities": ["owner.taste", "brand.choice", "naming.choice"],
+    "substitutes": ["repo convention", "heuristic ranking with stated rule"],
+    "notes": "Genuinely subjective choices only. Rankable = stays an a-task."
+  },
+  "PHYSICAL": {
+    "default": "human.presence",
+    "capabilities": ["human.presence", "device.manipulation", "paper.handling"],
+    "substitutes": [],
+    "notes": "Structural blocker (class A). No attempt required."
+  },
+  "IDENTITY": {
+    "default": "identity.attestation",
+    "capabilities": ["identity.attestation", "identity.biometric", "signature.principal", "token.2fa"],
+    "substitutes": [],
+    "notes": "Structural blocker (class A). KYC/CAPTCHA/signature/consent."
+  },
+  "AMBIGUITY": {
+    "default": "goal.disambiguation",
+    "capabilities": ["goal.disambiguation", "scope.choice"],
+    "substitutes": ["spec text", "prior decision log"],
+    "notes": "Multiple materially different valid goals. Re-read the spec first."
+  }
+}

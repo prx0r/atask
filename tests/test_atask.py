@@ -1502,13 +1502,68 @@ class TestMTask(unittest.TestCase):
         root = fresh_root(self)
         driver_boot(root)
         add_task(root, "a-m")
-        ok, mid = mrequest(root, "a-m", "gpt-5.6", 17, 0.71, 0.0, 0.92, 0.17)
-        self.assertTrue(ok)
+        ok, mid = mrequest(root, "a-m", "gpt-5.6", 17, 0.71, 0.0, 0.92, 0.17,
+                           "need 90% bar")
+        self.assertTrue(ok, mid)
         ok, msg = mresolve(root, mid, "approved-once", "one shot")
         self.assertTrue(ok, msg)
         self.assertEqual(open_m(root), [])
         ok, msg = mresolve(root, mid, "denied")
         self.assertFalse(ok)  # decided m-tasks don't reopen
+        # the Grant: exact cents, one-shot, receipt-tracked file
+        import json as _j
+        grants = [ _j.loads(l) for l in
+                   open(os.path.join(root, "grants.jsonl")).read().splitlines()]
+        self.assertEqual(len(grants), 1)
+        self.assertEqual(grants[0]["amount_cents"], 17)
+        self.assertTrue(grants[0]["once"])
+
+    def test_zero_gain_refused(self):
+        from atask import mrequest
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-m")
+        ok, msg = mrequest(root, "a-m", "gpt-5.6", 17, 0.9, 0.0, 0.8, 0.17,
+                           "want it anyway")
+        self.assertFalse(ok)
+        self.assertIn("marginal", msg)
+        ok, msg = mrequest(root, "a-m", "gpt-5.6", 17, 0.7, 0.0, 0.9, 0.17,
+                           "")
+        self.assertFalse(ok)
+        self.assertIn("reason", msg)
+
+
+class TestAutonomyMetrics(unittest.TestCase):
+    def test_rates_derive_from_events(self):
+        from atask import autonomy
+        root = fresh_root(self)
+        driver_boot(root)
+        add_task(root, "a-1")
+        finish_task(root, "a-1")
+        driver_pulse(root)
+        rep = autonomy(root)
+        self.assertEqual(rep["tasks_done"], 1)
+        self.assertEqual(rep["autonomy_rate"], 1.0)
+        self.assertEqual(rep["h_asked"], 0)
+
+    def test_next_five_derives_from_state(self):
+        from driver import next_five
+        root = fresh_root(self)
+        driver_boot(root)
+        goal_set(root, "g", ["x", "y"])
+        add_task(root, "a-r")
+        atask.set_status("a-r", "JUSTIFIED", root)
+        nxt = next_five(root)
+        kinds = [n["action"] for n in nxt]
+        self.assertIn("drain", kinds)
+        self.assertIn("propose", kinds)
+        self.assertLessEqual(len(nxt), 5)
+        # open humans outrank drains
+        earn(root, "a-r")
+        h_escalate(root, "a-r", "pick?", "PREFERENCE", ["a"], "a",
+                   operation="op-x")
+        nxt = next_five(root)
+        self.assertEqual(nxt[0]["action"], "answer")
 
 
 class TestQuiet(unittest.TestCase):

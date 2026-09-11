@@ -120,16 +120,32 @@ M_PROMOTE: + available machine capability + no authorizing grant +
 authorized alternatives fail constraints + positive marginal utility
 + bounded cost.
 
-## 15. Minimal schema
+## 15. Minimal schema (v0 — frozen until these work)
 
-ATask / Attempt / Block / HTask / Grant / Receipt (+MTask) as specced.
-Nothing more until these work.
+```python
+class ATask:      id, objective, completion_predicate, constraints, parent, state
+class Attempt:    id, task_id, operation, request_hash, result, timestamp
+class Block:      id, task_id, requirement, evidence_ids, alternatives_checked
+class HTask:      id, parent_atask, block_id, required_human_capability, expected_artifact
+class MTask:      id, parent_atask, block_id, resource, amount, expected_gain, alternatives
+class Grant:      id, resource, constraints, budget, expiry, signature
+class Receipt:    task, grant, action_hash, result_hash, cost
+```
+
+Kernel mapping: ATask=tasks.jsonl rows · Attempt=A-RUNs (mono timing) ·
+Block=h.block{operation, verdict, evidence, alternatives_checked} ·
+HTask=h-tasks.jsonl · MTask=m-tasks.jsonl (+counterfactuals) ·
+Grant=grants.jsonl (exact cents, one-shot, receipt-tracked) ·
+Receipt=runs/sha256 receipts + events stream.
 
 ## 16. Autonomy metrics (Seed0 objective)
 
 AutonomyRate, h-rate, m-rate, false-escalation rates, evidence-before-
 escalation, cost saved by routing, human-minutes/mission, $/$,
-post-escalation success. Minimize h-task creation subject to success/
+post-escalation success. `atask.py autonomy` derives the label-free
+subset now (AutonomyRate, rates, cents requested vs granted,
+post-escalation DONE count); false-rate labels stay Seed0-side.
+Minimize h-task creation subject to success/
 safety; minimize m-spend subject to success/quality. Human involvement
 is scarce, measurable, must be proven necessary (cf. HITL-overload
 critique).

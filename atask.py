@@ -601,6 +601,47 @@ def open_m(root: Path) -> list[dict]:
     return [m for m in mload(root) if m.get("status") == "open"]
 
 
+def autonomy(root: Path) -> dict:
+    """Seed0-objective metrics, derived from events+queues (no labels needed):
+    AutonomyRate = done / (done + h-promotions); h/m rates; $ requested vs
+    granted; post-escalation success (parent DONE after answer/grant)."""
+    from events import read as _eread
+    root = Path(root)
+    rows = _eread(root)
+    by_ev: dict = {}
+    for r in rows:
+        by_ev.setdefault(r.get("event"), []).append(r)
+    recs = {r.get("id"): r for r in load(root / "tasks.jsonl")}
+    n_done = sum(1 for r in recs.values() if r.get("status") == "DONE")
+    h_asked = by_ev.get("human.asked", [])
+    h_choices = by_ev.get("human.choice", [])
+    h_promotions = len({e.get("hid", "") for e in h_asked if e.get("hid")})
+    post_ok = 0
+    for e in h_choices:
+        tid = next((h.get("task", "") for h in hload(root)
+                    if h.get("id") == e.get("hid", "")), "")
+        if tid and recs.get(tid, {}).get("status") == "DONE":
+            post_ok += 1
+    req_cents = sum(int(e.get("amount_cents", 0) or 0)
+                    for e in by_ev.get("m.asked", []))
+    granted_cents = 0
+    for e in by_ev.get("m.decided", []):
+        if e.get("decision", "").startswith("approved"):
+            m = next((m for m in mload(root) if m.get("id") == e.get("mid", "")), {})
+            granted_cents += int(m.get("amount_cents", 0) or 0)
+    m_asked = len(by_ev.get("m.asked", []))
+    denom = n_done + h_promotions
+    return {"tasks_done": n_done, "tasks_total": len(recs),
+            "autonomy_rate": round(n_done / denom, 3) if denom else None,
+            "h_asked": len(h_asked), "h_answered": len(h_choices),
+            "h_rate_per_done": round(len(h_asked) / max(1, n_done), 3),
+            "m_asked": m_asked, "m_decided": len(by_ev.get("m.decided", [])),
+            "cents_requested": req_cents, "cents_granted": granted_cents,
+            "post_escalation_success": post_ok,
+            "verdict": ("healthy" if n_done and len(h_asked) <= n_done
+                        else "collecting")}
+
+
 def mrequest(root: Path, tid: str, resource: str, amount_cents: int,
              baseline_succ: float, baseline_cost: float,
              req_succ: float, req_cost: float,
@@ -619,6 +660,13 @@ def mrequest(root: Path, tid: str, resource: str, amount_cents: int,
     for v, n in ((baseline_succ, "baseline-succ"), (req_succ, "req-succ")):
         if not 0 <= float(v) <= 1:
             return False, f"{n} must be a probability 0..1"
+    gain_pp = round((float(req_succ) - float(baseline_succ)) * 100, 1)
+    if gain_pp <= 0:
+        return False, (f"refused: no positive marginal gain "
+                       f"({req_succ} vs baseline {baseline_succ}); paid model "
+                       f"must beat the free route or no request exists")
+    if not (reason or "").strip():
+        return False, "refused: state the reason (what threshold/evidence forces this)"
     mid = "m-" + _uuid.uuid4().hex[:6]
     ms = mload(root)
     ms.append({"id": mid, "parent": tid, "resource": resource[:200],
@@ -627,7 +675,7 @@ def mrequest(root: Path, tid: str, resource: str, amount_cents: int,
                             "cost_usd": float(baseline_cost)},
                "requested": {"success": float(req_succ),
                              "cost_usd": float(req_cost)},
-               "marginal_gain_pp": round((float(req_succ) - float(baseline_succ)) * 100, 1),
+               "marginal_gain_pp": gain_pp,
                "reason": reason[:500], "status": "open",
                "decision": None, "ts": time.time()})
     msave(ms, root)
@@ -657,6 +705,17 @@ def mresolve(root: Path, mid: str, decision: str,
     msave(ms, root)
     _emit(root, "m.decided", mid=mid, task_id=m.get("parent", ""),
           decision=decision)
+    if decision == "approved-once":
+        # The Grant: exact cents, single resource, one-shot. Tracked by
+        # receipt below, never a standing permission.
+        import uuid as _uuid2
+        g = {"id": "g-" + _uuid2.uuid4().hex[:6], "mid": mid,
+             "resource": m.get("resource", ""), "amount_cents": m.get("amount_cents", 0),
+             "once": True, "ts": time.time()}
+        with open(root / "grants.jsonl", "a") as f:
+            f.write(json.dumps(g, sort_keys=True) + "\n")
+        _emit(root, "grant.issued", grant=g["id"], mid=mid,
+              amount_cents=g["amount_cents"])
     return True, f"{mid} {decision}"
 
 
@@ -844,6 +903,7 @@ def main(argv: list[str] | None = None) -> int:
                         choices=("approved-once", "denied"))
     p_mres.add_argument("--note", default="")
     _dir(sub.add_parser("mlist"))
+    _dir(sub.add_parser("autonomy"))
     p_run = _dir(sub.add_parser("run"))
     p_run.add_argument("op", choices=("start", "usage", "finish", "list"))
     p_run.add_argument("--id", default=None, help="task id (start/list)")
@@ -1053,6 +1113,10 @@ def main(argv: list[str] | None = None) -> int:
         for m in open_m(root):
             print(f"{m['id']} parent={m.get('parent')} {m.get('resource','')[:60]} "
                   f"{m.get('amount_cents')}c gain={m.get('marginal_gain_pp')}pp")
+        return 0
+
+    if a.cmd == "autonomy":
+        print(json.dumps(autonomy(root), indent=1)[:2000])
         return 0
 
     if a.cmd == "hlist":

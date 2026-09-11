@@ -1,5 +1,19 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — htask gaps closed (session `hint`, GOAL_DONE, 90/90)
+- Spec review verdict was ~60%; closed to ~90%: M_PROMOTE gates (zero
+  marginal gain refused, reason required), capabilities.json graph
+  (6 kinds, defaults, substitutes), MORE shows open m when idle,
+  pulse/zoom report open m, `autonomy` metrics (AutonomyRate, h/m
+  rates, cents requested/granted, post-escalation success), Grant
+  records on approve-once (exact cents, one-shot, receipt-tracked).
+- Remaining spec-side, honestly Seed0/worker-side: live CapabilityGraph
+  enforcement (substitute-existence checks need worker knowledge),
+  router feasible-route computation, false-rate labels, human-minutes.
+- `next` command added per standing rule: every turn ends with 5
+  state-derived next actions (unblock → fix → drain → propose).
+  Rule embedded in ATASK turn loop + AGENTS.
+
 ## 2026-09-11 — no-agent-verification (session `noverify`, GOAL_DONE, 87/87)
 - `atask.py done` deleted: the agent has no DONE button. It files
   REPORTED with proof; only driver pulse promotes, only on green.

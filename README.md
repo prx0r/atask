@@ -55,7 +55,8 @@ question) ride in every press row with question + context + choice;
 
 ## State (per repo, `.atask/`)
 
-`goal.json` · `tasks.jsonl` · `h-tasks.jsonl` · `a-logs/` · `reports/`
+`goal.json` · `tasks.jsonl` · `h-tasks.jsonl` · `m-tasks.jsonl` ·
+`grants.jsonl` · `a-logs/` · `reports/`
 (validators check 5 sections) · `validators/` · `runs/` (proof receipts) ·
 `runs.jsonl` (A-RUN measurements) · `runs-open/` (in-flight runs) ·
 `presses.jsonl` · `events.jsonl` · `corrections.jsonl` · `pulse.jsonl` · `HALT.json`.
