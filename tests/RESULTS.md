@@ -1,5 +1,55 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — pull review: 13 commits, 68 tests, remote current
+Remote `prx0r/atask` == local through `baf7bfb`. Suite 68/68 (~0.9s).
+Reviewed the whole stack as if it arrived as one PR:
+
+APPROVE with findings (all non-blocking, all logged below):
+- Gate integrity is real: DONE-gated stoplight, receipt recompute,
+  no trust-only tasks, ask-gate kinds, no worker self-validation.
+  Three separate runs proved refusals fire on real violations.
+- Measurement honesty held under pressure: nulls stayed null across
+  8+ tracked runs; mono+wall dual clocks; append-only streams.
+- Tests earned their keep: audit caught aliasing + rooting bugs,
+  adversarial caught the existence≠integrity gap, e2e caught stale
+  evidence. The suite tests the contract, not the code.
+
+FINDINGS (critical eye):
+1. No gate on the gate-makers: everything lands direct to main, review
+   is post-hoc chat. Ironic for a control kernel. Fix: branch discipline
+   + release tags starting v0.1.0 (next step, not this commit).
+2. Single-goal rotation orphans old covers_goal (verify noise). Miners
+   must scope rows by goal era; document the era convention.
+3. validator.failed re-emits per stuck pulse (spam by design). No
+   consumer contract written for dedupe — L1 needs one line: dedupe on
+   (task_id, reasons-hash), keep first+latest.
+4. "7 verbs" oversells: MCP exposes 5 tools; answer/done are digit-side.
+   Rename docs to "5 tools + 2 human verbs" or expose read-only
+   predictors for them later. Chose honesty in docs next pass.
+5. Parallel writers append JSONL safely (O_APPEND) but task-id
+   uniqueness is check-then-write (TOCTOU). Fine at 1-3 workers;
+   re-test before any swarm.
+6. Budget brake vs "kernel never refuses" remains the one principled
+   exception — kept by explicit order, re-challenge quarterly.
+
+VISIONARY BUILDS (ordered by payoff):
+- V1 Seed0 miner: choice-frequency per (question-kind, options-shape).
+  Smallest thing that learns. Runs on presses+events, zero kernel change.
+- Hermes-kanban lane adapter: `delegate --to hermes/<board>` with the
+  atask id as idempotency key; poller fulfills back. Proves multi-agent.
+- Metered worker wrapper (Hermes-side): closes the null-token column
+  with provider-reported usage. Turns anecdotes into a dataset.
+- Plan-shape A/B: depth/branching/granularity vs time×tokens×pass.
+  Needs ~100+ runs; start collecting the fields now (already logged).
+- Release + changelog discipline so the kernel becomesale to depend on.
+
+CRITICAL NEXT STEPS:
+1. Revoke the token (used 5+ times, in chat history).
+2. Tag v0.1.0 + branch discipline from here.
+3. Run 10 real builds for volume (any domain, framework handles it).
+4. First consumer: kind-conditioned choice frequencies → confirm-predict.
+5. Second worker, one queue (contention proof).
+
 ## 2026-09-11 — token-honesty review (did it work? are we wasting tokens?)
 - Did the money run work? As control/proof: fully (goal→DONE, receipts,
   5/5 product tests, live fetch). As money: no — MVP exists, revenue
