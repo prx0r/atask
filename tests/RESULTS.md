@@ -1,5 +1,14 @@
 # Test results ledger (append-only, newest first)
 
+## 2026-09-11 — v0.1.1 batch (session `v011`, GOAL_DONE, 92/92)
+- Receipt churn fixed: `runs.save` skips writes when stable content
+  matches (mtime clean on reruns). Proved by new rerun test.
+- MetaCraft batch CSV mode ships: `--batch urls.txt` → url,score,fails
+  rows, per-URL failures row-local. 6/6 product tests.
+- Discipline note: filed a-receipt with a nonexistent evidence class;
+  REJECTED + refiled as a-receipt2 rather than editing history. The
+  loop holds.
+
 ## 2026-09-11 — openai backend doc (session `openaidoc`, GOAL_DONE, 91/91)
 - Saved `docs/OPENAI.md`: 18 sections, verdict = backend-not-replacement.
   Key splits kept: interruption=mechanism vs m-task=semantics;

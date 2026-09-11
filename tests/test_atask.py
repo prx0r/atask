@@ -1372,6 +1372,23 @@ class TestMinimalPass(unittest.TestCase):
         from atask import alog_read
         self.assertEqual(alog_read("a-u", root)[-1]["covers"], [0, 1])
 
+    def test_receipt_rerun_leaves_tree_clean(self):
+        import time as _t
+        d = os.path.join(tempfile.mkdtemp(prefix="receipt-"), "runs")
+        self.addCleanup(shutil.rmtree, os.path.dirname(d), True)
+        r1 = runs.new_receipt("test-run", {"suite": "x", "tests": 1})
+        p = runs.save(r1, d)
+        mtime = p.stat().st_mtime_ns
+        _t.sleep(0.02)
+        r2 = runs.new_receipt("test-run", {"suite": "x", "tests": 1})
+        self.assertEqual(r1["run_id"], r2["run_id"])
+        p2 = runs.save(r2, d)
+        self.assertEqual(p, p2)
+        self.assertEqual(p.stat().st_mtime_ns, mtime)  # untouched
+        r3 = runs.new_receipt("test-run", {"suite": "x", "tests": 2})
+        self.assertNotEqual(r1["run_id"], r3["run_id"])
+        runs.save(r3, d)  # different content writes fine
+
 
 class TestContend(unittest.TestCase):
     def test_two_workers_one_queue(self):

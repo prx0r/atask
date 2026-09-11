@@ -38,6 +38,17 @@ def save(receipt: dict, root: str | Path = "runs") -> Path:
     d = Path(root)
     d.mkdir(parents=True, exist_ok=True)
     p = d / (receipt["run_id"].replace(":", "_") + ".json")
+    if p.exists():
+        try:
+            prior = json.loads(p.read_text())
+            # Same content id + same stable content = rerun: leave the file
+            # untouched (mtime clean) instead of churning timestamps.
+            if (prior.get("run_id") == receipt.get("run_id")
+                    and canonical(prior.get("content", {}))
+                    == canonical(receipt.get("content", {}))):
+                return p
+        except Exception:
+            pass
     p.write_text(json.dumps(receipt, indent=1, sort_keys=True))
     return p
 
